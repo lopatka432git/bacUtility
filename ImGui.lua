@@ -1517,26 +1517,29 @@ function ImGui:CreateWindow(WindowConfig)
 
 	--// Open/Close
 	WindowConfig.Open = true
-	function WindowConfig:SetOpen(Open: true, NoAnimation: false)
-		local WindowAbSize = Window.AbsoluteSize 
-		local TitleBarSize = TitleBar.AbsoluteSize 
+function WindowConfig:SetOpen(Open, NoAnimation)
+    local WindowAbSize = Window.AbsoluteSize
+    local TitleBarSize = TitleBar.AbsoluteSize
 
-		self.Open = Open
+    if not Open then
+        self.Size = Window.Size            
+    end
+    self.Open = Open
 
-		--// Call animations
-		ImGui:HeaderAnimate(TitleBar, true, Open, TitleBar, Toggle.ToggleButton)
-		ImGui:Tween(Resize, {
-			TextTransparency = Open and 0.6 or 1,
-			Interactable = Open
-		}, nil, NoAnimation)
-		ImGui:Tween(Window, {
-			Size = Open and self.Size or UDim2.fromOffset(WindowAbSize.X, TitleBarSize.Y)
-		}, nil, NoAnimation)
-		ImGui:Tween(Body, {
-			Visible = Open
-		}, nil, NoAnimation)
-		return self
-	end
+    ToolBar.Visible = Open and (WindowConfig.TabsBar ~= false)
+    Body.Visible = Open                    
+    Content.ClipsDescendants = true        
+
+    ImGui:HeaderAnimate(TitleBar, true, Open, TitleBar, Toggle.ToggleButton)
+    ImGui:Tween(Resize, {
+        TextTransparency = Open and 0.6 or 1,
+        Interactable = Open
+    }, nil, NoAnimation)
+    ImGui:Tween(Window, {
+        Size = Open and self.Size or UDim2.fromOffset(WindowAbSize.X, TitleBarSize.Y)
+    }, nil, NoAnimation)
+    return self
+end
 
 	function WindowConfig:SetVisible(Visible: boolean)
 		Window.Visible = Visible 
