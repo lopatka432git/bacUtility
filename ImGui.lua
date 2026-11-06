@@ -1,1744 +1,1382 @@
---// Written by depso
---// MIT License
---// Copyright (c) 2024 Depso
-
-local ImGui = {
-	Animations = {
-		Buttons = {
-			MouseEnter = {
-				BackgroundTransparency = 0.5,
-			},
-			MouseLeave = {
-				BackgroundTransparency = 0.7,
-			} 
-		},
-		Tabs = {
-			MouseEnter = {
-				BackgroundTransparency = 0.5,
-			},
-			MouseLeave = {
-				BackgroundTransparency = 1,
-			} 
-		},
-		Inputs = {
-			MouseEnter = {
-				BackgroundTransparency = 0,
-			},
-			MouseLeave = {
-				BackgroundTransparency = 0.5,
-			} 
-		},
-		WindowBorder = {
-			Selected = {
-				Transparency = 0,
-				Thickness = 1
-			},
-			Deselected = {
-				Transparency = 0.7,
-				Thickness = 1
-			}
-		},
-	},
-
-	Windows = {},
-	Animation = TweenInfo.new(0.1),
-	UIAssetId = "rbxassetid://76246418997296"
-}
-
-
---// Universal functions
-local NullFunction = function() end
-local CloneRef = cloneref or function(_)return _ end
-local function GetService(...): ServiceProvider
-	return CloneRef(game:GetService(...))
-end
-
-function ImGui:Warn(...)
-	if self.NoWarnings then return end
-	return warn("[IMGUI]", ...)
-end
-
---// Services 
-local TweenService: TweenService = GetService("TweenService")
-local UserInputService: UserInputService = GetService("UserInputService")
-local Players: Players = GetService("Players")
-local CoreGui = GetService("CoreGui")
-local RunService: RunService = GetService("RunService")
-
---// LocalPlayer
-local LocalPlayer = Players.LocalPlayer
-local PlayerGui = LocalPlayer.PlayerGui
-local Mouse = LocalPlayer:GetMouse()
-
---// ImGui Config
-local IsStudio = RunService:IsStudio()
-ImGui.NoWarnings = not IsStudio
-
---// Prefabs
-function ImGui:FetchUI()
-	--// Cache check 
-	local CacheName = "DepsoImGui"
-	if _G[CacheName] then
-		self:Warn("Prefabs loaded from Cache")
-		return _G[CacheName]
-	end
-
-	local UI = nil
-
-	--// Universal
-	if not IsStudio then
-		local UIAssetId = ImGui.UIAssetId
-		UI = game:GetObjects(UIAssetId)[1]
-	else --// Studio
-		local UIName = "DepsoImGui"
-		UI = PlayerGui:FindFirstChild(UIName) or script.DepsoImGui
-	end
-
-	_G[CacheName] = UI
-	return UI
-end
-
-local UI = ImGui:FetchUI()
-local Prefabs = UI.Prefabs
-ImGui.Prefabs = Prefabs
-Prefabs.Visible = false
-
---// Styles
-local AddionalStyles = {
-	[{
-		Name="Border"
-	}] = function(GuiObject: GuiObject, Value, Class)
-		local Outline = GuiObject:FindFirstChildOfClass("UIStroke")
-		if not Outline then return end
-
-		local BorderThickness = Class.BorderThickness
-		if BorderThickness then
-			Outline.Thickness = BorderThickness
-		end
-
-		Outline.Enabled = Value
-	end,
-
-	[{
-		Name="Ratio"
-	}] = function(GuiObject: GuiObject, Value, Class)
-		local RatioAxis = Class.RatioAxis or "Height"
-		local AspectRatio = Class.Ratio or 4/3
-		local AspectType = Class.AspectType or Enum.AspectType.ScaleWithParentSize
-
-		local Ratio = GuiObject:FindFirstChildOfClass("UIAspectRatioConstraint")
-		if not Ratio then
-			Ratio = ImGui:CreateInstance("UIAspectRatioConstraint", GuiObject)
-		end
-
-		Ratio.DominantAxis = Enum.DominantAxis[RatioAxis]
-		Ratio.AspectType = AspectType
-		Ratio.AspectRatio = AspectRatio
-	end,
-
-	[{
-		Name="CornerRadius",
-		Recursive=true
-	}] = function(GuiObject: GuiObject, Value, Class)
-		local UICorner = GuiObject:FindFirstChildOfClass("UICorner")
-		if not UICorner then
-			UICorner = ImGui:CreateInstance("UICorner", GuiObject)
-		end
-
-		UICorner.CornerRadius = Class.CornerRadius
-	end,
-
-	[{
-		Name="Label"
-	}] = function(GuiObject: GuiObject, Value, Class)
-		local Label = GuiObject:FindFirstChild("Label")
-		if not Label then return end
-
-		Label.Text = Class.Label
-		function Class:SetLabel(Text)
-			Label.Text = Text
-			return Class
-		end
-	end,
-
-	[{
-		Name="NoGradient",
-		Aliases = {"NoGradientAll"},
-		Recursive=true
-	}] = function(GuiObject: GuiObject, Value, Class)
-		local UIGradient = GuiObject:FindFirstChildOfClass("UIGradient")
-		if not UIGradient then return end
-		UIGradient.Enabled = not Value
-	end,
-
-	--// Addional functions for classes
-	[{
-		Name="Callback"
-	}] = function(GuiObject: GuiObject, Value, Class)
-		function Class:SetCallback(NewCallback)
-			Class.Callback = NewCallback
-			return Class
-		end
-		function Class:FireCallback(NewCallback)
-			return Class.Callback(GuiObject)
-		end
-	end,
-
-	[{
-		Name="Value"
-	}] = function(GuiObject: GuiObject, Value, Class)
-		function Class:GetValue()
-			return Class.Value
-		end
-	end,
-}
-
-function ImGui:GetName(Name: string)
-	local Format = "%s_"
-	return Format:format(Name)
-end
-
-function ImGui:CreateInstance(Class, Parent, Properties)
-	local Instance = Instance.new(Class, Parent)
-	for Key, Value in next, Properties or {} do
-		Instance[Key] = Value
-	end
-	return Instance
-end
-
-function ImGui:ApplyColors(ColorOverwrites, GuiObject: GuiObject, ElementType: string)
-	for Info, Value in next, ColorOverwrites do
-		local Key = Info
-		local Recursive = false
-
-		if typeof(Info) == "table" then
-			Key = Info.Name or ""
-			Recursive = Info.Recursive or false
-		end
-
-		--// Child object
-		if typeof(Value) == "table" then
-			local Element = GuiObject:FindFirstChild(Key, Recursive)
-
-			if not Element then 
-				if ElementType == "Window" then
-					Element = GuiObject.Content:FindFirstChild(Key, Recursive)
-					if not Element then continue end
-				else 
-					warn(Key, "was not found in", GuiObject)
-					warn("Table:", Value)
-
-					continue
-				end
-			end
-
-			ImGui:ApplyColors(Value, Element)
-			continue
-		end
-
-		--// Set property
-		GuiObject[Key] = Value
-	end
-end
-
-function ImGui:CheckStyles(GuiObject: GuiObject, Class, Colors)
-	--// Addional styles
-	for Info, Callback in next, AddionalStyles do
-		local Value = Class[Info.Name]
-		local Aliases = Info.Aliases
-
-		if Aliases and not Value then
-			for _, Alias in Info.Aliases do
-				Value = Class[Alias]
-				if Value then break end
-			end
-		end
-		if Value == nil then continue end
-
-		--// Stylise children
-		Callback(GuiObject, Value, Class)
-		if Info.Recursive then
-			for _, Child in next, GuiObject:GetChildren() do
-				Callback(Child, Value, Class)
-			end
-		end
-	end
-
-	--// Label functions/Styliser
-	local ElementType = GuiObject.Name
-	GuiObject.Name = self:GetName(ElementType)
-
-	--// Apply Colors
-	local Colors = Colors or {}
-	local ColorOverwrites = Colors[ElementType]
-
-	if ColorOverwrites then
-		ImGui:ApplyColors(ColorOverwrites, GuiObject, ElementType)
-	end
-
-	--// Set properties
-	for Key, Value in next, Class do
-		pcall(function() --// If the property does not exist
-			GuiObject[Key] = Value
-		end)
-	end
-end
-
-function ImGui:MergeMetatables(Class, Instance: GuiObject)
-	local Metadata = {}
-	Metadata.__index = function(self, Key)
-		local suc, Value = pcall(function()
-			local Value = Instance[Key]
-			if typeof(Value) == "function" then
-				return function(...)
-					return Value(Instance, ...)
-				end
-			end
-			return Value
-		end)
-		return suc and Value or Class[Key]
-	end
-
-	Metadata.__newindex = function(self, Key, Value)
-		local Key2 = Class[Key]
-		if Key2 ~= nil or typeof(Value) == "function" then
-			Class[Key] = Value
-		else
-			Instance[Key] = Value
-		end
-	end
-
-	return setmetatable({}, Metadata)
-end
-
-function ImGui:Concat(Table, Separator: " ") 
-	local Concatenated = ""
-	for Index, String in next, Table do
-		Concatenated ..= tostring(String) .. (Index ~= #Table and Separator or "")
-	end
-	return Concatenated
-end
-
-function ImGui:ContainerClass(Frame: Frame, Class, Window)
-	local ContainerClass = Class or {}
-	local WindowConfig = ImGui.Windows[Window]
-
-	function ContainerClass:NewInstance(Instance: Frame, Class, Parent)
-		--// Config
-		Class = Class or {}
-
-		--// Set Parent
-		Instance.Parent = Parent or Frame
-		Instance.Visible = true
-
-		--// TODO
-		if WindowConfig.NoGradientAll then
-			Class.NoGradient = true
-		end
-
-		local Colors = WindowConfig.Colors
-		ImGui:CheckStyles(Instance, Class, Colors)
-
-		--// External callback check
-		if Class.NewInstanceCallback then
-			Class.NewInstanceCallback(Instance)
-		end
-
-		--// Merge the class with the properties of the instance
-		return ImGui:MergeMetatables(Class, Instance)
-	end
-
-	function ContainerClass:Button(Config)
-		Config = Config or {}
-		local Button = Prefabs.Button:Clone()
-		local ObjectClass = self:NewInstance(Button, Config)
-
-		local function Callback(...)
-			local func = Config.Callback or NullFunction
-			return func(ObjectClass, ...)
-		end
-		Button.Activated:Connect(Callback)
-
-		--// Apply animations
-		ImGui:ApplyAnimations(Button, "Buttons")
-		return ObjectClass
-	end
-
-	function ContainerClass:Image(Config)
-		Config = Config or {}
-		local Image = Prefabs.Image:Clone()
-
-		--// Check for rbxassetid
-		if tonumber(Config.Image) then
-			Config.Image = `rbxassetid://{Config.Image}`
-		end
-
-		local ObjectClass = self:NewInstance(Image, Config)
-		local function Callback(...)
-			local func = Config.Callback or NullFunction
-			return func(ObjectClass, ...)
-		end
-		Image.Activated:Connect(Callback)
-
-		--// Apply animations
-		ImGui:ApplyAnimations(Image, "Buttons")
-		return ObjectClass
-	end
-
-	function ContainerClass:ScrollingBox(Config)
-		Config = Config or {}
-		local Box = Prefabs.ScrollBox:Clone()
-		local ContainClass = ImGui:ContainerClass(Box, Config, Window) 
-		return self:NewInstance(Box, ContainClass)
-	end
-
-	function ContainerClass:Label(Config)
-		Config = Config or {}
-		local Label = Prefabs.Label:Clone()
-		return self:NewInstance(Label, Config)
-	end
-
-	function ContainerClass:Checkbox(Config)
-		Config = Config or {}
-		local IsRadio = Config.IsRadio
-
-		local CheckBox = Prefabs.CheckBox:Clone()
-		local Tickbox: ImageButton = CheckBox.Tickbox
-		local Tick: ImageLabel = Tickbox.Tick
-		local Label = CheckBox.Label
-		local ObjectClass = self:NewInstance(CheckBox, Config)
-
-		--// Stylise to correct type
-		if IsRadio then
-			Tick.ImageTransparency = 1
-			Tick.BackgroundTransparency = 0
-		else
-			Tickbox:FindFirstChildOfClass("UIPadding"):Remove()
-			Tickbox:FindFirstChildOfClass("UICorner"):Remove()
-		end
-
-		--// Apply animations
-		ImGui:ApplyAnimations(CheckBox, "Buttons", Tickbox)
-
-		local Value = Config.Value or false
-
-		--// Callback
-		local function Callback(...)
-			local func = Config.Callback or NullFunction
-			return func(ObjectClass, ...)
-		end
-
-		function Config:SetTicked(NewValue: boolean, NoAnimation: false)
-			Value = NewValue
-			Config.Value = Value
-
-			--// Fire callback
-			Callback(Value)
-
-			--// Animations
-			local Size = Value and UDim2.fromScale(1,1) or UDim2.fromScale(0,0)
-			ImGui:Tween(Tick, {
-				Size = Size
-			}, nil, NoAnimation)
-			ImGui:Tween(Label, {
-				TextTransparency = Value and 0 or 0.3
-			}, nil, NoAnimation)
-			return Config
-		end
-		Config:SetTicked(Value, true)
-
-		function Config:Toggle()
-			Config:SetTicked(not Value)
-			return Config
-		end
-
-		--// Connect functions
-		local function Clicked()
-			Value = not Value
-			Config:SetTicked(Value)
-		end
-		CheckBox.Activated:Connect(Clicked)
-		Tickbox.Activated:Connect(Clicked)
-
-		return ObjectClass
-	end
-
-	function ContainerClass:RadioButton(Config)
-		Config = Config or {}
-		Config.IsRadio = true
-		return self:Checkbox(Config)
-	end
-
-	function ContainerClass:Viewport(Config)
-		Config = Config or {}
-		local Model = Config.Model
-
-		local Holder = Prefabs.Viewport:Clone()
-		local Viewport: ViewportFrame = Holder.Viewport
-		local WorldModel: WorldModel = Viewport.WorldModel
-		Config.WorldModel = WorldModel
-		Config.Viewport = Viewport
-
-		function Config:SetCamera(Camera)
-			Viewport.CurrentCamera = Camera
-			Config.Camera = Camera
-			Camera.CFrame = CFrame.new(0,0,0)
-			return Config
-		end
-
-		local Camera = Config.Camera or ImGui:CreateInstance("Camera", Viewport)
-		Config:SetCamera(Camera)
-
-		function Config:SetModel(Model: Model, PivotTo: CFrame)
-			WorldModel:ClearAllChildren()
-
-			--// Set new model
-			if Config.Clone then
-				Model = Model:Clone()
-			end
-			if PivotTo then
-				Model:PivotTo(PivotTo)
-			end
-
-			Model.Parent = WorldModel
-			Config.Model = Model
-			return Model
-		end
-
-		--// Set model
-		if Model then
-			Config:SetModel(Model)
-		end
-
-		local ContainClass = ImGui:ContainerClass(Holder, Config, Window) 
-		return self:NewInstance(Holder, ContainClass)
-	end
-
-	function ContainerClass:InputText(Config)
-		Config = Config or {}
-		local TextInput = Prefabs.TextInput:Clone()
-		local TextBox: TextBox = TextInput.Input
-		local ObjectClass = self:NewInstance(TextInput, Config)
-
-		TextBox.Text = Config.Value or ""
-		TextBox.PlaceholderText = Config.PlaceHolder
-		TextBox.MultiLine = Config.MultiLine == true
-
-		--// Apply animations
-		ImGui:ApplyAnimations(TextInput, "Inputs")
-
-		local function Callback(...)
-			local func = Config.Callback or NullFunction
-			return func(ObjectClass, ...)
-		end
-		TextBox:GetPropertyChangedSignal("Text"):Connect(function()
-			local Value = TextBox.Text
-			Config.Value = Value
-			return Callback(Value)
-		end)
-
-		function Config:SetValue(Text)
-			TextBox.Text = tostring(Text)
-			Config.Value = Text
-			return Config
-		end
-
-		function Config:Clear()
-			TextBox.Text = ""
-			return Config
-		end
-
-		return ObjectClass
-	end
-
-	function ContainerClass:InputTextMultiline(Config)
-		Config = Config or {}
-		Config.Label = ""
-		Config.Size = UDim2.new(1, 0, 0, 38)
-		Config.MultiLine = true
-		return ContainerClass:InputText(Config)
-	end
-
-	function ContainerClass:GetRemainingHeight()
-		local Padding = Frame:FindFirstChildOfClass("UIPadding")
-		local UIListLayout = Frame:FindFirstChildOfClass("UIListLayout")
-
-		local LayoutPaddding = UIListLayout.Padding
-		local PaddingTop = Padding.PaddingTop
-		local PaddingBottom = Padding.PaddingBottom
-
-		local PaddingSizeY = PaddingTop+PaddingBottom+LayoutPaddding
-		local OccupiedY = Frame.AbsoluteSize.Y+PaddingSizeY.Offset+3
-
-		return UDim2.new(1, 0, 1, -OccupiedY) 
-	end
-
-	function ContainerClass:Console(Config)
-		Config = Config or {}
-		local MaxLines = Config.MaxLines or 100
-		local Console: ScrollingFrame = Prefabs.Console:Clone()
-		local Source: TextBox = Console.Source
-		local Lines = Console.Lines
-
-		if Config.Fill then
-			Console.Size = ContainerClass:GetRemainingHeight()
-		end
-
-		--// Set values from config
-		Source.TextEditable = Config.ReadOnly ~= true
-		Source.Text = Config.Text or ""
-		Source.TextWrapped = Config.TextWrapped == true
-		Source.RichText = Config.RichText == true
-		Lines.Visible = Config.LineNumbers == true
-
-		function Config:UpdateLineNumbers()
-			if not Config.LineNumbers then return end
-
-			local LinesCount = #Source.Text:split("\n")
-			local Format = Config.LinesFormat or "%s"
-
-			--// Update lines text
-			Lines.Text = ""
-			for i = 1, LinesCount do
-				Lines.Text ..= `{Format:format(i)}{i ~= LinesCount and '\n' or ''}`
-			end
-
-			Source.Size = UDim2.new(1, -Lines.AbsoluteSize.X, 0, 0)
-			return Config
-		end
-
-		function Config:UpdateScroll()
-			local CanvasSizeY = Console.AbsoluteCanvasSize.Y
-			Console.CanvasPosition = Vector2.new(0, CanvasSizeY)
-			return Config
-		end
-
-		function Config:SetText(Text)
-			if not Config.Enabled then return end
-			Source.Text = Text
-			Config:UpdateLineNumbers()
-			return Config
-		end
-		
-		function Config:GetValue()
-			return Source.Text
-		end
-
-		function Config:Clear(Text)
-			Source.Text = ""
-			Config:UpdateLineNumbers()
-			return Config
-		end
-
-		function Config:AppendText(...)
-			if not Config.Enabled then return end
-			local NewString = "\n" .. ImGui:Concat({...}, " ") 
-			Source.Text ..= NewString
-			Config:UpdateLineNumbers()
-
-			if Config.AutoScroll then
-				Config:UpdateScroll()
-			end
-
-			local Lines = Source.Text:split("\n")
-			if #Lines > MaxLines then
-				Source.Text = Source.Text:sub(#Lines[1]+2)
-			end
-			return Config
-		end
-
-		--// Connect events
-		Source.Changed:Connect(Config.UpdateLineNumbers)
-
-		return self:NewInstance(Console, Config)
-	end
-
-	function ContainerClass:Table(Config)
-		Config = Config or {}
-		local Table: Frame = Prefabs.Table:Clone()
-		local TableChildCount = #Table:GetChildren() --// Performance
-
-		--// Configure Table style
-		if Config.Fill then
-			Table.Size = ContainerClass:GetRemainingHeight()
-		end
-		local RowName = "Row"
-
-		local RowsCount = 0
-		function Config:CreateRow()
-			local RowClass = {}
-
-			local Row: Frame = Table.RowTemp:Clone()
-			local UIListLayout = Row:FindFirstChildOfClass("UIListLayout")
-			UIListLayout.VerticalAlignment = Enum.VerticalAlignment[Config.Align or "Center"]
-
-			local RowChildCount = #Row:GetChildren() --// Performance
-			Row.Name = RowName
-			Row.Visible = true
-
-			--// Background colors
-			if Config.RowBackground then
-				Row.BackgroundTransparency = RowsCount % 2 == 1 and 0.92 or 1
-			end
-
-			function RowClass:CreateColumn(CConfig)
-				CConfig = CConfig or {}
-				local Column: Frame = Row.ColumnTemp:Clone()
-				Column.Visible = true
-				Column.Name = "Column"
-
-				local Stroke = Column:FindFirstChildOfClass("UIStroke")
-				Stroke.Enabled = Config.Border ~= false
-
-				local ContainClass = ImGui:ContainerClass(Column, CConfig, Window) 
-				return ContainerClass:NewInstance(Column, ContainClass, Row)
-			end
-
-			function RowClass:UpdateColumns()
-				if not Row or not Table then return end
-				local Columns = Row:GetChildren()
-				local RowsCount = #Columns - RowChildCount
-
-				for _, Column: Frame in next, Columns do
-					if not Column:IsA("Frame") then continue end
-					Column.Size = UDim2.new(1/RowsCount, 0, 0, 0)
-				end
-				return RowClass
-			end
-			Row.ChildAdded:Connect(RowClass.UpdateColumns)
-			Row.ChildRemoved:Connect(RowClass.UpdateColumns)
-
-			RowsCount += 1
-			return ContainerClass:NewInstance(Row, RowClass, Table)
-		end
-
-		function Config:UpdateRows()
-			local Rows = Table:GetChildren()
-			local PaddingY = Table.UIListLayout.Padding.Offset + 2
-			local RowsCount = #Rows - TableChildCount
-
-			for _, Row: Frame in next, Rows do
-				if not Row:IsA("Frame") then continue end
-				Row.Size = UDim2.new(1, 0, 1/RowsCount, -PaddingY)
-			end
-			return Config
-		end
-
-		if Config.RowsFill then
-			Table.AutomaticSize = Enum.AutomaticSize.None
-			Table.ChildAdded:Connect(Config.UpdateRows)
-			Table.ChildRemoved:Connect(Config.UpdateRows)
-		end
-
-		function Config:ClearRows()
-			RowsCount = 0
-			local PostRowName = ImGui:GetName(RowName)
-			for _, Row: Frame in next, Table:GetChildren() do
-				if not Row:IsA("Frame") then continue end
-
-				if Row.Name == PostRowName then
-					Row:Remove()
-				end
-			end
-			return Config
-		end
-
-		return self:NewInstance(Table, Config) 
-	end
-
-	function ContainerClass:Grid(Config)
-		Config = Config or {}
-		Config.Grid = true
-
-		return self:Table(Config)
-	end
-
-	function ContainerClass:CollapsingHeader(Config)
-		Config = Config or {}
-		local Title = Config.Title or ""
-		Config.Name = Title
-
-		local Header = Prefabs.CollapsingHeader:Clone()
-		local Titlebar: TextButton = Header.TitleBar
-		local Container: Frame = Header.ChildContainer
-		Titlebar.Title.Text = Title
-
-		--// Apply animations
-		if Config.IsTree then
-			ImGui:ApplyAnimations(Titlebar, "Tabs")
-		else
-			ImGui:ApplyAnimations(Titlebar, "Buttons")
-		end
-
-		--// Open Animations
-		function Config:SetOpen(Open)
-			local Animate = Config.NoAnimation ~= true
-			Config.Open = Open
-			ImGui:HeaderAnimate(Header, Animate, Open, Titlebar)
-			return self
-		end
-
-		--// Toggle
-		local ToggleButton = Titlebar.Toggle.ToggleButton
-		local function Toggle()
-			Config:SetOpen(not Config.Open)
-		end
-		Titlebar.Activated:Connect(Toggle)
-		ToggleButton.Activated:Connect(Toggle)
-
-		--// Custom toggle image
-		if Config.Image then
-			ToggleButton.Image = Config.Image 
-		end
-
-		--// Open
-		Config:SetOpen(Config.Open or false)
-
-		local ContainClass = ImGui:ContainerClass(Container, Config, Window) 
-		return self:NewInstance(Header, ContainClass)
-	end
-
-	function ContainerClass:TreeNode(Config)
-		Config = Config or {}
-		Config.IsTree = true
-		return self:CollapsingHeader(Config)
-	end
-
-	function ContainerClass:Separator(Config)
-		Config = Config or {}
-		local Separator = Prefabs.SeparatorText:Clone()
-		local HeaderLabel = Separator.TextLabel
-		HeaderLabel.Text = Config.Text or ""
-
-		if not Config.Text then
-			HeaderLabel.Visible = false
-		end
-
-		return self:NewInstance(Separator, Config)
-	end
-
-	function ContainerClass:Row(Config)
-		Config = Config or {}
-		local Row: Frame = Prefabs.Row:Clone()
-		local UIListLayout = Row:FindFirstChildOfClass("UIListLayout")
-		local UIPadding = Row:FindFirstChildOfClass("UIPadding")
-
-		if Config.Spacing then
-			UIListLayout.Padding = UDim.new(0, Config.Spacing)
-		end
-
-		function Config:Fill()
-			local Children = Row:GetChildren()
-			local Rows = #Children - 2 --// -UIListLayout + UIPadding
-
-			--// Change layout
-			local Padding = UIListLayout.Padding.Offset * 2
-			UIListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-
-			--// Apply correct margins
-			UIPadding.PaddingLeft = UIListLayout.Padding
-			UIPadding.PaddingRight = UIListLayout.Padding
-
-			for _, Child: Instance in next, Children do
-				local YScale = 0
-				if Child:IsA("ImageButton") then
-					YScale = 1
-				end
-				pcall(function()
-					Child.Size = UDim2.new(1/Rows, -Padding, YScale, 0)
-				end)
-			end
-			return Config
-		end
-
-		local ContainClass = ImGui:ContainerClass(Row, Config, Window) 
-		return self:NewInstance(Row, ContainClass)
-	end
-
-	--TODO
-	-- Vertical 
-	-- :SetPercentage
-	function ContainerClass:Slider(Config)
-		Config = Config or {}
-		local Value = Config.Value or 0
-		local ValueFormat = Config.Format or "%.d"
-		Config.Name = Config.Label or ""
-
-		local Slider: TextButton = Prefabs.Slider:Clone()
-		local UIPadding = Slider:FindFirstChildOfClass("UIPadding")
-		local Grab: Frame = Slider.Grab
-		local ValueText = Slider.ValueText
-		local ObjectClass = self:NewInstance(Slider, Config)
-
-		local function Callback(...)
-			local func = Config.Callback or NullFunction
-			return func(ObjectClass, ...)
-		end
-
-		--// Apply Progress styles
-		if Config.Progress then
-			local UIGradient = Grab:FindFirstChildOfClass("UIGradient")
-			local Label = Slider.Label
-
-			local PaddingSides = UDim.new(0,2)
-			local Diff = UIPadding.PaddingLeft - PaddingSides
-
-			Grab.AnchorPoint = Vector2.new(0, 0.5)
-			UIGradient.Enabled = true
-
-			UIPadding.PaddingLeft = PaddingSides
-			UIPadding.PaddingRight = PaddingSides
-
-			Label.Position = UDim2.new(1, 15-Diff.Offset, 0, 0)
-		end
-
-		function Config:SetValue(Value: number, Slider: false)
-			local MinValue = Config.MinValue
-			local MaxValue = Config.MaxValue
-			local Differnce = MaxValue - MinValue
-			local Percentage = Value/MaxValue
-
-			if Slider then
-				Percentage = Value
-				Value = MinValue + (Differnce * Percentage)
-			else
-				Value = tonumber(Value)
-			end
-
-			--// Animate grab
-			local Props = {
-				Position = UDim2.fromScale(Percentage, 0.5)
-			}
-
-			if Config.Progress then
-				Props = {
-					Size = UDim2.fromScale(Percentage, 1)
-				}
-			end
-
-			ImGui:Tween(Grab, Props)
-
-			Config.Value = Value
-			ValueText.Text = ValueFormat:format(Value, MaxValue) 
-
-			Callback(Value)
-			return Config
-		end
-		Config:SetValue(Value)
-
-		local Dragging = false
-		local MouseMoveConnection = nil
-
-		local function MouseMove()
-			if Config.ReadOnly then return end
-			if not Dragging then return end
-			local MouseX = UserInputService:GetMouseLocation().X
-			local LeftPos = Slider.AbsolutePosition.X
-
-			local Percentage = (MouseX-LeftPos)/Slider.AbsoluteSize.X
-			Percentage = math.clamp(Percentage, 0, 1)
-			Config:SetValue(Percentage, true)
-		end
-
-		--// Connect mouse events
-		local SliderHovered = ImGui:ConnectHover({
-			Parent = Slider,
-			OnInput = function(MouseHovering, Input)
-				if not MouseHovering then return end
-				if Input.UserInputType == Enum.UserInputType.MouseButton1 then
-					Dragging = true
-
-					--// Save heavy performance
-					MouseMoveConnection = Mouse.Move:Connect(MouseMove)
-				end
-			end
-		})
-
-		Slider.Activated:Connect(MouseMove)
-
-		UserInputService.InputEnded:Connect(function(inputObject)
-			if not Dragging then return end
-			if inputObject.UserInputType == Enum.UserInputType.MouseButton1 then
-				Dragging = false
-				MouseMoveConnection:Disconnect()
-			end
-		end)
-
-		return ObjectClass
-	end
-
-	function ContainerClass:ProgressSlider(Config)
-		Config = Config or {}
-		Config.Progress = true
-		return self:Slider(Config)
-	end
-
-	function ContainerClass:ProgressBar(Config)
-		Config = Config or {}
-		Config.Progress = true
-		Config.ReadOnly = true
-		Config.MinValue = 0
-		Config.MaxValue = 100
-		Config.Format = "% i%%"
-		Config = self:Slider(Config)
-
-		function Config:SetPercentage(Value: number)
-			Config:SetValue(Value)
-		end
-
-		return Config
-	end
-
-	function ContainerClass:Keybind(Config)
-		Config = Config or {}
-		local Keybind: TextButton = Prefabs.Keybind:Clone()
-		local ValueText: TextButton = Keybind.ValueText
-		local Key = Config.Value 
-		local ObjectClass = nil
-
-		local function Callback(...)
-			local func = Config.Callback or NullFunction
-			return func(ObjectClass, ...)
-		end
-
-		function Config:SetValue(NewKey: Enum.KeyCode)
-			if not NewKey then return end
-			ValueText.Text = NewKey.Name
-			Config.Value = NewKey
-
-			if NewKey == Enum.KeyCode.Backspace then
-				ValueText.Text = "Not set"
-				return
-			end
-		end
-		Config:SetValue(Key)
-
-		Keybind.Activated:Connect(function()
-			ValueText.Text = "..."
-			local NewKey = UserInputService.InputBegan:wait()
-			if not UserInputService.WindowFocused then return end 
-
-			if NewKey.KeyCode.Name == "Unknown" then
-				return Config:SetValue(Key)
-			end
-
-			wait(.1) --// 👍
-			Config:SetValue(NewKey.KeyCode)
-		end)
-
-		Config.Connection = UserInputService.InputBegan:Connect(function(Input, GameProcessed)
-			if not Config.IgnoreGameProcessed and GameProcessed then return end
-
-			if Input.KeyCode == Config.Value then
-				return Callback(Input.KeyCode)
-			end
-		end)
-
-		ObjectClass = self:NewInstance(Keybind, Config)
-		return ObjectClass
-	end
-
-	function ContainerClass:Combo(Config)
-		Config = Config or {}
-		Config.Open = false
-
-		local Combo: TextButton = Prefabs.Combo:Clone()
-		local Toggle: ImageButton = Combo.Toggle.ToggleButton
-		local ValueText = Combo.ValueText
-		ValueText.Text = Config.Placeholder or ""
-
-		local Dropdown = nil
-		local ObjectClass = self:NewInstance(Combo, Config)
-
-		local ComboHovering = ImGui:ConnectHover({
-			Parent = Combo
-		})
-
-		local function Callback(Value, ...)
-			local func = Config.Callback or NullFunction
-			Config:SetOpen(false)
-			return func(ObjectClass, Value, ...)
-		end
-
-		function Config:SetValue(Value, ...)
-			local Items = Config.Items or {}
-			local DictValue = Items[Value]
-			ValueText.Text = Value
-			Config.Selected = Value
-
-			return Callback(DictValue or Value) 
-		end
-
-		function Config:SetOpen(Open: true)
-			local Animate = Config.NoAnimation ~= true
-			ImGui:HeaderAnimate(Combo, Animate, Open, Combo, Toggle)
-			Config.Open = Open
-
-			if Open then
-				Dropdown = ImGui:Dropdown({
-					Parent = Combo,
-					Items = Config.Items or {},
-					Selected = Config.SetValue,
-					Closed = function()
-						if not ComboHovering.Hovering then 
-							Config:SetOpen(false)
-						end
-					end,
-				})
-			end
-
-			return self
-		end
-
-		local function ToggleOpen()
-			if Dropdown then
-				Dropdown:Close()
-			end
-			Config:SetOpen(not Config.Open)
-		end
-
-		--// Connect events
-		Combo.Activated:Connect(ToggleOpen)
-		Toggle.Activated:Connect(ToggleOpen)
-		ImGui:ApplyAnimations(Combo, "Buttons")
-
-		if Config.Selected then
-			Config:SetValue(Config.Selected)
-		end
-
-		return ObjectClass 
-	end
-
-	return ContainerClass
-end
-
-function ImGui:Dropdown(Config)
-	local Parent: GuiObject = Config.Parent
-	if not Parent then return end
-
-	local Selection: ScrollingFrame = Prefabs.Selection:Clone()
-	local UIStroke = Selection:FindFirstChildOfClass("UIStroke")
-
-	local Padding = UIStroke.Thickness*2
-	local Position = Parent.AbsolutePosition
-	local Size = Parent.AbsoluteSize
-
-	Selection.Parent = self.ScreenGui
-	Selection.Position = UDim2.fromOffset(Position.X+Padding, Position.Y+Size.Y)
-
-	local Hover = self:ConnectHover({
-		Parent = Selection,
-		OnInput = function(MouseHovering, Input)
-			if not Input.UserInputType.Name:find("Mouse") then return end
-
-			if not MouseHovering then
-				Config:Close()
-			end
-		end,
-	})
-
-	function Config:Close()
-		local CloseCallback = Config.Closed
-		if CloseCallback then
-			CloseCallback()
-		end
-		Hover:Disconnect()
-		return Selection:Remove()
-	end
-
-	local function Selected(self)
-		local Value = self.Text
-		Config:Close()
-		return Config:Selected(Value)
-	end
-
-	--// Append items
-	local ItemTemplate: TextButton = Selection.Template
-	ItemTemplate.Visible = false
-
-	for Index, Index2 in next, Config.Items do
-		local NewItem: TextButton = ItemTemplate:Clone()
-		NewItem.Text = typeof(Index) ~= "number" and tostring(Index) or tostring(Index2)
-		NewItem.Parent = Selection
-		NewItem.Visible = true
-
-		self:ApplyAnimations(NewItem, "Tabs")
-		NewItem.Activated:Connect(function()
-			return Selected(NewItem)
-		end)
-	end
-	
-	--// Configure size of the frame
-		-- Roblox does not support UISizeConstraint on a scrolling frame grr
-	
-	local MaxSizeY = Config.MaxSizeY or 200
-	local YSize = math.clamp(Selection.AbsoluteCanvasSize.Y, Size.Y, MaxSizeY)
-	Selection.Size = UDim2.fromOffset(Size.X-Padding, YSize)
-	
-	return Config
-end
-
-function ImGui:GetAnimation(Animation: boolean?)
-	return Animation and self.Animation or TweenInfo.new(0)
-end
-
-function ImGui:Tween(Instance: GuiObject, Props: SharedTable, tweenInfo, NoAnimation: false)
-	local tweenInfo = tweenInfo or ImGui:GetAnimation(not NoAnimation)
-	local Tween = TweenService:Create(Instance, 
-		tweenInfo,
-		Props
-	)
-	Tween:Play()
-	return Tween
-end
-
-function ImGui:ApplyAnimations(Instance: GuiObject, Class: string, Target: GuiObject?)
-	local Animatons = ImGui.Animations
-	local ColorProps = Animatons[Class]
-
-	if not ColorProps then 
-		return warn("No colors for", Class)
-	end
-
-	--// Apply tweens for connections
-	local Connections = {}
-	for Connection, Props in next, ColorProps do
-		if typeof(Props) ~= "table" then continue end
-		local Target = Target or Instance
-		local Callback = function()
-			ImGui:Tween(Target, Props)
-		end
-
-		--// Connections
-		Connections[Connection] = Callback
-		Instance[Connection]:Connect(Callback)
-	end
-
-	--// Reset colors
-	if Connections["MouseLeave"] then
-		Connections["MouseLeave"]()
-	end
-
-	return Connections 
-end
-
-function ImGui:HeaderAnimate(Header: Instance, Animation, Open, TitleBar: Instance, Toggle)
-	local ToggleButtion = Toggle or TitleBar.Toggle.ToggleButton
-
-	--// Togle animation
-	ImGui:Tween(ToggleButtion, {
-		Rotation = Open and 90 or 0,
-	}):Play()
-
-	--// Container animation
-	local Container: Frame = Header:FindFirstChild("ChildContainer")
-	if not Container then return end
-
-	local UIListLayout: UIListLayout = Container.UIListLayout
-	local UIPadding: UIPadding = Container:FindFirstChildOfClass("UIPadding")
-	local ContentSize = UIListLayout.AbsoluteContentSize
-
-	if UIPadding then
-		local Top = UIPadding.PaddingTop.Offset
-		local Bottom = UIPadding.PaddingBottom.Offset
-		ContentSize = Vector2.new(ContentSize.X, ContentSize.Y+Top+Bottom)
-	end
-
-	Container.AutomaticSize = Enum.AutomaticSize.None
-	if not Open then
-		Container.Size = UDim2.new(1, -10, 0, ContentSize.Y)
-	end
-
-	--// Animate
-	local Tween = ImGui:Tween(Container, {
-		Size = UDim2.new(1, -10, 0, Open and ContentSize.Y or 0),
-		Visible = Open
-	})
-	Tween.Completed:Connect(function()
-		if not Open then return end
-		Container.AutomaticSize = Enum.AutomaticSize.Y
-		Container.Size = UDim2.new(1, -10, 0, 0)
-	end)
-end
-
-function ImGui:ApplyDraggable(Frame: Frame, Header: Frame)
-	local tweenInfo = ImGui:GetAnimation(true)
-	local Header = Header or Frame
-
-	local Dragging = false
-	local KeyBeganPos = nil
-	local BeganPos = Frame.Position
-
-	--// Whitelist
-	local UserInputTypes = {
-		Enum.UserInputType.MouseButton1,
-		Enum.UserInputType.Touch
-	}
-
-	local function UserInputTypeAllowed(InputType: Enum.UserInputType)
-		return table.find(UserInputTypes, InputType)
-	end
-
-	--// Debounce 
-	Header.InputBegan:Connect(function(Key)
-		if UserInputTypeAllowed(Key.UserInputType) then
-			Dragging = true
-			KeyBeganPos = Key.Position
-			BeganPos = Frame.Position
-		end
-	end)
-
-	UserInputService.InputEnded:Connect(function(Key)
-		if UserInputTypeAllowed(Key.UserInputType) then
-			Dragging = false
-		end
-	end)
-
-	--// Dragging
-	local function Movement(Input)
-		if not Dragging then return end
-
-		local Delta = Input.Position - KeyBeganPos
-		local Position = UDim2.new(
-			BeganPos.X.Scale, 
-			BeganPos.X.Offset + Delta.X, 
-			BeganPos.Y.Scale, 
-			BeganPos.Y.Offset + Delta.Y
-		)
-
-		ImGui:Tween(Frame, {
-			Position = Position
-		}):Play()
-	end
-
-	--// Connect movement events
-	UserInputService.TouchMoved:Connect(Movement)
-	UserInputService.InputChanged:Connect(function(Input)
-		if Input.UserInputType == Enum.UserInputType.MouseMovement then 
-			return Movement(Input)
-		end
-	end)
-end
-
-
-function ImGui:ApplyResizable(MinSize, Frame: Frame, Dragger: TextButton, Config)
-	local DragStart
-	local OrignialSize
-
-	MinSize = MinSize or Vector2.new(160, 90)
-
-	Dragger.MouseButton1Down:Connect(function()
-		if DragStart then return end
-		OrignialSize = Frame.AbsoluteSize			
-		DragStart = Vector2.new(Mouse.X, Mouse.Y)
-	end)	
-
-	UserInputService.InputChanged:Connect(function(Input)
-		if not DragStart or Input.UserInputType ~= Enum.UserInputType.MouseMovement then 
-			return
-		end
-
-		local MousePos = Vector2.new(Mouse.X, Mouse.Y)
-		local mouseMoved = MousePos - DragStart
-
-		local NewSize = OrignialSize + mouseMoved
-		NewSize = UDim2.fromOffset(
-			math.max(MinSize.X, NewSize.X), 
-			math.max(MinSize.Y, NewSize.Y)
-		)
-
-		Frame.Size = NewSize
-		if Config then
-			Config.Size = NewSize
-		end
-	end)
-
-	UserInputService.InputEnded:Connect(function(Input)
-		if Input.UserInputType == Enum.UserInputType.MouseButton1 then
-			DragStart = nil
-		end
-	end)	
-end
-
-function ImGui:ConnectHover(Config)
-	local Parent = Config.Parent
-	local Connections = {}
-	Config.Hovering = false
-
-	--// Connect Events
-	table.insert(Connections, Parent.MouseEnter:Connect(function()
-		Config.Hovering = true
-	end))
-	table.insert(Connections, Parent.MouseLeave:Connect(function()
-		Config.Hovering = false
-	end))
-
-	if Config.OnInput then
-		table.insert(Connections, UserInputService.InputBegan:Connect(function(Input)
-			return Config.OnInput(Config.Hovering, Input)
-		end))
-	end
-
-	function Config:Disconnect()
-		for _, Connection in next, Connections do
-			Connection:Disconnect()
-		end
-	end
-
-	return Config
-end
-
-function ImGui:ApplyWindowSelectEffect(Window: GuiObject, TitleBar)
-	local UIStroke = Window:FindFirstChildOfClass("UIStroke")
-
-	local Colors = {
-		Selected = {
-			BackgroundColor3 = TitleBar.BackgroundColor3
-		},
-		Deselected = {
-			BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-		}
-	}
-
-	local function SetSelected(Selected)
-		local Animations = ImGui.Animations
-		local Type = Selected and "Selected" or "Deselected"
-		local TweenInfo = ImGui:GetAnimation(true) 
-
-		ImGui:Tween(TitleBar, Colors[Type])
-		ImGui:Tween(UIStroke, Animations.WindowBorder[Type])
-	end
-
-	self:ConnectHover({
-		Parent = Window,
-		OnInput = function(MouseHovering, Input)
-			if Input.UserInputType.Name:find("Mouse") then
-				SetSelected(MouseHovering)
-			end
-		end,
-	})
-end
-
-function ImGui:SetWindowProps(Properties, IgnoreWindows)
-	local Module = {
-		OldProperties = {}
-	}
-	
-	--// Collect windows & set properties
-	for Window in next, ImGui.Windows do
-		if table.find(IgnoreWindows, Window) then continue end
-		
-		local OldValues = {}
-		Module.OldProperties[Window] = OldValues
-		
-		for Key, Value in next, Properties do
-			OldValues[Key] = Window[Key]
-			Window[Key] = Value
-		end
-	end
-	
-	--// Revert to previous values
-	function Module:Revert()
-		for Window in next, ImGui.Windows do
-			local OldValues = Module.OldProperties[Window]
-			if not OldValues then continue end
-
-			for Key, Value in next, OldValues do
-				Window[Key] = Value
-			end
-		end
-	end
-	
-	return Module
-end
-
-function ImGui:CreateWindow(WindowConfig)
-	--// Create Window frame
-	local Window: Frame = Prefabs.Window:Clone()
-	Window.Parent = ImGui.ScreenGui
-	Window.Visible = true
-	WindowConfig.Window = Window
-
-	local Content = Window.Content
-	local Body = Content.Body
-
-	--// Window Resize
-	local Resize = Window.ResizeGrab
-	Resize.Visible = WindowConfig.NoResize ~= true
-
-	local MinSize = WindowConfig.MinSize or Vector2.new(160, 90)
-	ImGui:ApplyResizable(
-		MinSize, 
-		Window, 
-		Resize,
-		WindowConfig
-	)
-
-	--// Title Bar
-	local TitleBar: Frame = Content.TitleBar
-	TitleBar.Visible = WindowConfig.NoTitleBar ~= true
-
-	local Toggle = TitleBar.Left.Toggle
-	Toggle.Visible = WindowConfig.NoCollapse ~= true
-	ImGui:ApplyAnimations(Toggle.ToggleButton, "Tabs")
-
-	local ToolBar = Content.ToolBar
-	ToolBar.Visible = WindowConfig.TabsBar ~= false
-
-	if not WindowConfig.NoDrag then
-		ImGui:ApplyDraggable(Window)
-	end
-
-	--// Close Window 
-	local CloseButton: TextButton = TitleBar.Close
-	CloseButton.Visible = WindowConfig.NoClose ~= true
-
-	function WindowConfig:Close()
-		local Callback = WindowConfig.CloseCallback
-		WindowConfig:SetVisible(false)
-		if Callback then
-			Callback(WindowConfig)
-		end
-		return WindowConfig
-	end
-	CloseButton.Activated:Connect(WindowConfig.Close)
-
-	function WindowConfig:GetHeaderSizeY(): number
-		local ToolbarY = ToolBar.Visible and ToolBar.AbsoluteSize.Y or 0
-		local TitlebarY = TitleBar.Visible and TitleBar.AbsoluteSize.Y or 0
-		return ToolbarY + TitlebarY
-	end
-
-	function WindowConfig:UpdateBody()
-		local HeaderSizeY = self:GetHeaderSizeY()
-		Body.Size = UDim2.new(1, 0, 1, -HeaderSizeY)
-	end
-	WindowConfig:UpdateBody()
-
-	--// Open/Close
-	WindowConfig.Open = true
-function WindowConfig:SetOpen(Open, NoAnimation)
-    local WindowAbSize = Window.AbsoluteSize
-    local TitleBarSize = TitleBar.AbsoluteSize
-
-    if not Open then
-        self.Size = Window.Size            
+local function egg(stringx) 
+    local output = {}
+    for i = 1, #stringx do
+        local charCode = string.byte(stringx, i)
+        local egged = ""
+        for j = 1, math.random(5, 10) do
+            egged = egged .. string.char(math.random(32, 126))
+        end
+        output[#output+1] = string.format("%03d%s", charCode, egged)
     end
-    self.Open = Open
-
-    ToolBar.Visible = Open and (WindowConfig.TabsBar ~= false)
-    Body.Visible = Open                    
-    Content.ClipsDescendants = true        
-
-    ImGui:HeaderAnimate(TitleBar, true, Open, TitleBar, Toggle.ToggleButton)
-    ImGui:Tween(Resize, {
-        TextTransparency = Open and 0.6 or 1,
-        Interactable = Open
-    }, nil, NoAnimation)
-    ImGui:Tween(Window, {
-        Size = Open and self.Size or UDim2.fromOffset(WindowAbSize.X, TitleBarSize.Y)
-    }, nil, NoAnimation)
-    return self
+    return table.concat(output)
 end
 
-	function WindowConfig:SetVisible(Visible: boolean)
-		Window.Visible = Visible 
-		return self
-	end
+local main = {}
 
-	function WindowConfig:SetTitle(Text)
-		TitleBar.Left.Title.Text = tostring(Text)
-		return self
-	end
-	function WindowConfig:Remove()
-		Window:Remove()
-		return self
-	end
+function main:Begin(PROPS) 
+    if not PROPS then 
+        return
+    end
 
-	Toggle.ToggleButton.Activated:Connect(function()
-		local Open = not WindowConfig.Open
-		WindowConfig.Open = Open
-		return WindowConfig:SetOpen(Open)
-	end)	
+    warn("This is an alpha release of imgui-rbx, expect way more elements being added in later updates! cya");
+    warn("(also expect some bugs)");
 
-	function WindowConfig:CreateTab(Config)
-		local Name = Config.Name or ""
-		local TabButton = ToolBar.TabButton:Clone()
-		TabButton.Name = Name
-		TabButton.Text = Name
-		TabButton.Visible = true
-		TabButton.Parent = ToolBar
-		Config.Button = TabButton
+    local MenuOptions = PROPS or {
+        Name = PROPS.Name or "imgui-rbx | alpha 0.1",
+        Width = PROPS.Width or 574,
+        Height = PROPS.Height or 350
+    }
 
-		local AutoSizeAxis = WindowConfig.AutoSize or "Y"
-		local Content: Frame = Body.Template:Clone()
-		Content.AutomaticSize = Enum.AutomaticSize[AutoSizeAxis]
-		Content.Visible = Config.Visible or false
-		Content.Name = Name
-		Content.Parent = Body
-		Config.Content = Content
+    local function SecureGui(gui_element)
+        if (syn and syn.protect_gui) then 
+            syn.protect_gui(gui_element)
+            gui_element.Parent = game:GetService("CoreGui")                                 
+        elseif gethui then
+            gui_element.Parent = gethui()  
+        else
+            error("Cannot secure GUI, it's unsafe to continue.");                           
+            gui_element.Parent = game:GetService("Players").LocalPlayer.PlayerGui           
+        end
+    end
 
-		if AutoSizeAxis == "Y" then
-			Content.Size = UDim2.fromScale(1, 0)
-		elseif AutoSizeAxis == "X" then
-			Content.Size = UDim2.fromScale(0, 1)
-		end
+    local function GetFont() 
+        return Font.fromId(12187374954)                                                     
+    end
 
-		TabButton.Activated:Connect(function()
-			WindowConfig:ShowTab(Config)
-		end)
+    local ImGui = Instance.new("ScreenGui")
+    local Window = Instance.new("Frame")
+    --local WindowCorner = Instance.new("UICorner")
+    local WindowPanel = Instance.new("Frame")
+    local WindowPanelIcon = Instance.new("ImageLabel")
+    local MinimiseButton = Instance.new("TextButton")
+    local MinimiseButtonIcon = Instance.new("ImageLabel")
+    local WindowPanelIconPadding = Instance.new("UIPadding")
+    local WindowDisplayName = Instance.new("TextLabel")
+    local WindowDisplayNamePadding = Instance.new("UIPadding")
+    local ResizeAll = Instance.new("TextButton")
+    local ResizeAllIcon = Instance.new("ImageLabel")
+    local WindowElementContainer = Instance.new("Frame")
+    local WindowElements = Instance.new("ScrollingFrame")
+    local WindowElementsLayout = Instance.new("UIListLayout")
+    local WindowElementsPadding = Instance.new("UIPadding")
+    
+    local WindowElementsContainerLayout = Instance.new("UIListLayout")
+    local AWindowSep = Instance.new("Frame")        
 
-		function Config:GetContentSize()
-			return Content.AbsoluteSize
-		end
+    ImGui.Name = string.format("ImGui-%s", tostring(egg(tostring(game:GetService("Players").LocalPlayer.UserId))))
+    ImGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    ImGui.ResetOnSpawn = false
+    SecureGui(ImGui)                                
 
-		--// Apply animations
-		Config = ImGui:ContainerClass(Content, Config, Window)
-		ImGui:ApplyAnimations(TabButton, "Tabs")
+    Window.Name = "Window"
+    Window.Parent = ImGui
+    Window.Active = true
+    Window.BackgroundColor3 = Color3.fromRGB(21, 22, 23)
+    Window.BackgroundTransparency = 0.050
+    Window.ClipsDescendants = true
+    Window.Position = UDim2.new(0.283211678, 0, 0.155285195, 0)
+    Window.Selectable = true
+    Window.Size = UDim2.new(0, MenuOptions.Width, 0, MenuOptions.Height)
 
-		--// Automatic sizes
-		self:UpdateBody()
-		if WindowConfig.AutoSize then
-			Content:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
-				local Size = Config:GetContentSize()
-				self:SetSize(Size)
-			end)
-		end
+    --WindowCorner.CornerRadius = UDim.new(0, 9)
+    --WindowCorner.Name = "WindowCorner"
+    --WindowCorner.Parent = Window
 
-		return Config
-	end
+    WindowPanel.Name = "WindowPanel"
+    WindowPanel.Parent = Window
+    WindowPanel.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    WindowPanel.BackgroundTransparency = 1.000
+    WindowPanel.Size = UDim2.new(1, 0, 0, 25)
+    WindowPanel.ZIndex = 2
 
-	function WindowConfig:SetPosition(Position)
-		Window.Position = Position
-		return self
-	end
+    WindowPanelIcon.Name = "WindowPanelIcon"
+    WindowPanelIcon.Parent = WindowPanel
+    WindowPanelIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+    WindowPanelIcon.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    WindowPanelIcon.BackgroundTransparency = 1.000
+    WindowPanelIcon.Position = UDim2.new(0.5, 0, 0.5, 0)
+    WindowPanelIcon.Size = UDim2.new(0.999999881, 0, 1, 0)
+    WindowPanelIcon.ZIndex = 2
+    WindowPanelIcon.Image = "rbxassetid://13034670565"
+    WindowPanelIcon.ScaleType = Enum.ScaleType.Tile
 
-	function WindowConfig:SetSize(Size)
-		local HeaderSizeY = self:GetHeaderSizeY()
+    MinimiseButton.Name = "MinimiseButton"
+    MinimiseButton.Parent = WindowPanelIcon
+    MinimiseButton.AnchorPoint = Vector2.new(0.5, 0.5)
+    MinimiseButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    MinimiseButton.BackgroundTransparency = 1.000
+    MinimiseButton.Position = UDim2.new(0, 13, 0.5, 0)
+    MinimiseButton.Size = UDim2.new(0.0452961661, 0, 1, 0)
+    MinimiseButton.FontFace = GetFont()
+    MinimiseButton.Text = ""
+    MinimiseButton.TextColor3 = Color3.fromRGB(0, 0, 0)
+    MinimiseButton.TextSize = 14.000
 
-		if typeof(Size) == "Vector2" then
-			Size = UDim2.fromOffset(Size.X, Size.Y)
-		end
+    MinimiseButtonIcon.Name = "MinimiseButtonIcon"
+    MinimiseButtonIcon.Parent = MinimiseButton
+    MinimiseButtonIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+    MinimiseButtonIcon.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    MinimiseButtonIcon.BackgroundTransparency = 1.000
+    MinimiseButtonIcon.Position = UDim2.new(0.5, 0, 0.5, 2)
+    MinimiseButtonIcon.Size = UDim2.new(0, 12, 0, 12)
+    MinimiseButtonIcon.Image = "rbxassetid://13034875812"
 
-		--// Apply new size
-		local NewSize = UDim2.new(
-			Size.X.Scale,
-			Size.X.Offset,
-			Size.Y.Scale,
-			Size.Y.Offset + HeaderSizeY
-		)
-		self.Size = NewSize
-		Window.Size = NewSize
+    WindowPanelIconPadding.Name = "WindowPanelIconPadding"
+    WindowPanelIconPadding.Parent = WindowPanelIcon
+    WindowPanelIconPadding.PaddingLeft = UDim.new(0, 2)
 
-		return self
-	end
+    WindowDisplayName.Name = "WindowDisplayName"
+    WindowDisplayName.Parent = WindowPanelIcon
+    WindowDisplayName.AnchorPoint = Vector2.new(0.5, 0.5)
+    WindowDisplayName.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    WindowDisplayName.BackgroundTransparency = 1.000
+    WindowDisplayName.Position = UDim2.new(0.5, 0, 0.5, 0)
+    WindowDisplayName.Size = UDim2.new(1, 0, 1, 0)
+    WindowDisplayName.FontFace = Font.fromId(12187362578)
+    WindowDisplayName.Text = PROPS.Name
+    WindowDisplayName.TextColor3 = Color3.fromRGB(225, 225, 225)
+    WindowDisplayName.TextSize = 16.000
+    WindowDisplayName.TextXAlignment = Enum.TextXAlignment.Left
 
-	--// Tab change system 
-	function WindowConfig:ShowTab(TabClass: SharedTable)
-		local TargetPage: Frame = TabClass.Content
+    WindowDisplayNamePadding.Name = "WindowDisplayNamePadding"
+    WindowDisplayNamePadding.Parent = WindowDisplayName
+    WindowDisplayNamePadding.PaddingLeft = UDim.new(0, 30)
 
-		--// Page animation
-		if not TargetPage.Visible and not TabClass.NoAnimation then
-			TargetPage.Position = UDim2.fromOffset(0, 5)
-		end
+    ResizeAll.Name = "ResizeAll"
+    ResizeAll.Parent = Window
+    ResizeAll.AnchorPoint = Vector2.new(0.5, 0.5)
+    ResizeAll.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    ResizeAll.BackgroundTransparency = 1.000
+    ResizeAll.BorderSizePixel = 0
+    ResizeAll.Position = UDim2.new(0, 563, 0, 339)
+    ResizeAll.Size = UDim2.new(0, 22, 0, 22)
+    ResizeAll.FontFace = GetFont()
+    ResizeAll.Text = ""
+    ResizeAll.TextColor3 = Color3.fromRGB(0, 0, 0)
+    ResizeAll.TextSize = 14.000
+    ResizeAll.ZIndex = 2
 
-		--// Hide other tabs
-		for _, Page in next, Body:GetChildren() do
-			Page.Visible = Page == TargetPage
-		end
+    ResizeAllIcon.Name = "ResizeAllIcon"
+    ResizeAllIcon.Parent = ResizeAll
+    ResizeAllIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+    ResizeAllIcon.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    ResizeAllIcon.BackgroundTransparency = 1.000
+    ResizeAllIcon.Position = UDim2.new(0.5, 0, 0.5, 0)
+    ResizeAllIcon.Size = UDim2.new(1.06818187, 0, 1, 0)
+    ResizeAllIcon.ZIndex = -1
+    ResizeAllIcon.Image = "rbxassetid://13034819689"
 
-		--// Page animation
-		ImGui:Tween(TargetPage, {
-			Position = UDim2.fromOffset(0, 0)
-		})
-		return self
-	end
+    WindowElementContainer.Name = "WindowElementContainer"
+    WindowElementContainer.Parent = Window
+    WindowElementContainer.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    WindowElementContainer.BackgroundTransparency = 1.000
+    WindowElementContainer.Size = UDim2.new(1, 0, 1, 0)
 
-	function WindowConfig:Center() --// Without an Anchor point
-		local Size = Window.AbsoluteSize
-		local Position = UDim2.new(0.5,-Size.X/2,0.5,-Size.Y/2)
-		self:SetPosition(Position)
-		return self
-	end
+    WindowElements.Name = "WindowElements"
+    WindowElements.Parent = WindowElementContainer
+    WindowElements.Active = true
+    WindowElements.AnchorPoint = Vector2.new(0.5, 0.5)
+    WindowElements.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    WindowElements.BackgroundTransparency = 1.000
+    WindowElements.BorderSizePixel = 0
+    WindowElements.Position = UDim2.new(0.5, 0, 0.54285717, 0)
+    WindowElements.Size = UDim2.new(1, -5, 0.914285719, 0)
+    WindowElements.CanvasSize = UDim2.new(0, 0, 0, 0)
+    WindowElements.ScrollBarThickness = 10
 
-	--// Load Style Configs
-	WindowConfig:SetTitle(WindowConfig.Title or "Depso UI")
+    WindowElementsLayout.Name = "WindowElementsLayout"
+    WindowElementsLayout.Parent = WindowElements
+    WindowElementsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    WindowElementsLayout.Padding = UDim.new(0, 6)
 
-	if not WindowConfig.Open then
-		WindowConfig:SetOpen(WindowConfig.Open or true, true)
-	end
+    WindowElementsPadding.Name = "WindowElementsPadding"
+    WindowElementsPadding.Parent = WindowElements
+    WindowElementsPadding.PaddingBottom = UDim.new(0, 15)
+    WindowElementsPadding.PaddingLeft = UDim.new(0, 7)
+    WindowElementsPadding.PaddingRight = UDim.new(0, 20)
+    WindowElementsPadding.PaddingTop = UDim.new(0, 10)
 
-	ImGui.Windows[Window] = WindowConfig
-	ImGui:CheckStyles(Window, WindowConfig, WindowConfig.Colors)
+    WindowElementsContainerLayout.Name = "WindowElementsContainerLayout"
+    WindowElementsContainerLayout.Parent = WindowElementContainer
+    WindowElementsContainerLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 
-	--// Window section events
-	if not WindowConfig.NoSelectEffect then
-		ImGui:ApplyWindowSelectEffect(Window, TitleBar)
-	end
+    AWindowSep.Name = "AWindowSep"
+    AWindowSep.Parent = WindowElementContainer
+    AWindowSep.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    AWindowSep.BackgroundTransparency = 1.000
+    AWindowSep.Position = UDim2.new(0.00609756075, 0, 0, 0)
+    AWindowSep.Size = UDim2.new(0, 567, 0, 25)
 
-	return ImGui:MergeMetatables(WindowConfig, Window)
+    local ElementHandler = {}
+
+    function ElementHandler:Text(TextDisplay) 
+        local Label_Element = Instance.new("TextLabel")
+        Label_Element.Name = "Label_Element"
+        Label_Element.Parent = WindowElements
+        Label_Element.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Label_Element.BackgroundTransparency = 1.000
+        Label_Element.Size = UDim2.new(1, 0, 0, 20)
+        Label_Element.FontFace = GetFont()
+        Label_Element.Text = TextDisplay
+        Label_Element.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Label_Element.TextSize = 17.000
+        Label_Element.TextXAlignment = Enum.TextXAlignment.Left
+    end
+
+    function ElementHandler:Button(TextDisplay) 
+        local Button_Element = Instance.new("TextButton")
+        local Button_ElementPadding = Instance.new("UIPadding")
+        local OnClick = {}
+
+        Button_Element.Name = "Button_Element"
+        Button_Element.Parent = WindowElements
+        Button_Element.BackgroundColor3 = Color3.fromRGB(41, 74, 122)
+        Button_Element.BorderColor3 = Color3.fromRGB(74, 74, 83)
+        Button_Element.Position = UDim2.new(0, 0, 0.0833333358, 0)
+        Button_Element.Size = UDim2.new(0, 21, 0, 23)
+        Button_Element.FontFace = GetFont()
+        Button_Element.Text = TextDisplay
+        Button_Element.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Button_Element.TextSize = 17.000
+
+        Button_ElementPadding.Name = "Button_ElementPadding"
+        Button_ElementPadding.Parent = Button_Element
+        Button_ElementPadding.PaddingLeft = UDim.new(0, 6)
+        Button_ElementPadding.PaddingRight = UDim.new(0, 6)
+
+        Button_Element.Activated:Connect(function(inputObject, clickCount)
+            if inputObject.UserInputType.Name == "MouseButton1" then 
+                return true
+            end
+        end)
+
+        function OnClick:Connect(Function) 
+            Button_Element.MouseButton1Click:Connect(Function)
+        end
+                
+        local box = Button_Element
+        local text = box.Text
+
+        local size = box.TextBounds.X
+        
+        if game:IsLoaded() then box.Size = UDim2.new(0, size + 20, 0, 23) end
+
+        return OnClick
+    end
+
+    function ElementHandler:InputText(InputTextOptions) 
+        local TextBox_Element = Instance.new("Frame")
+        local TextBox_ElementName = Instance.new("TextLabel")
+        local TextBox_ElementLayout = Instance.new("UIListLayout")
+        local TextBox_ElementInput = Instance.new("TextBox")
+        local TextBox_ElementInputPadding = Instance.new("UIPadding")
+
+        TextBox_Element.Name = "TextBox_Element"
+        TextBox_Element.Parent = WindowElements
+        TextBox_Element.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        TextBox_Element.BackgroundTransparency = 1.000
+        TextBox_Element.Size = UDim2.new(1, 0, 0, 23)
+
+        TextBox_ElementName.Name = "TextBox_ElementName"
+        TextBox_ElementName.Parent = TextBox_Element
+        TextBox_ElementName.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        TextBox_ElementName.BackgroundTransparency = 1.000
+        TextBox_ElementName.Position = UDim2.new(2.21000004, 0, 0, 0)
+        TextBox_ElementName.Size = UDim2.new(1, 0, 0.0299999993, 20)
+        TextBox_ElementName.FontFace = GetFont()
+        TextBox_ElementName.Text = InputTextOptions.Name
+        TextBox_ElementName.TextColor3 = Color3.fromRGB(255, 255, 255)
+        TextBox_ElementName.TextSize = 17.000
+        TextBox_ElementName.TextXAlignment = Enum.TextXAlignment.Left
+
+        TextBox_ElementLayout.Name = "TextBox_ElementLayout"
+        TextBox_ElementLayout.Parent = TextBox_Element
+        TextBox_ElementLayout.FillDirection = Enum.FillDirection.Horizontal
+        TextBox_ElementLayout.Padding = UDim.new(0, 7)
+
+        TextBox_ElementInput.Name = "TextBox_ElementInput"
+        TextBox_ElementInput.Parent = TextBox_Element
+        TextBox_ElementInput.BackgroundColor3 = Color3.fromRGB(41, 74, 122)
+        TextBox_ElementInput.BorderColor3 = Color3.fromRGB(74, 74, 83)
+        TextBox_ElementInput.ClipsDescendants = true
+        TextBox_ElementInput.Size = UDim2.new(0.300000012, 0, 1, 0)
+        TextBox_ElementInput.ClearTextOnFocus = false
+        TextBox_ElementInput.FontFace = GetFont()
+        TextBox_ElementInput.PlaceholderColor3 = Color3.fromRGB(255, 255, 255)
+        TextBox_ElementInput.ShowNativeInput = false
+        TextBox_ElementInput.Text = ""
+        TextBox_ElementInput.TextColor3 = Color3.fromRGB(221, 221, 221)
+        TextBox_ElementInput.TextSize = 16.000
+        TextBox_ElementInput.TextXAlignment = Enum.TextXAlignment.Left
+
+        TextBox_ElementInputPadding.Name = "TextBox_ElementInputPadding"
+        TextBox_ElementInputPadding.Parent = TextBox_ElementInput
+        TextBox_ElementInputPadding.PaddingLeft = UDim.new(0, 5)
+        TextBox_ElementInputPadding.PaddingRight = UDim.new(0, 5)
+
+        TextBox_ElementInput.FocusLost:Connect(function(enterPressed, inputThatCausedFocusLoss)
+            if enterPressed then
+                pcall(InputTextOptions.OnEnter, TextBox_ElementInput.Text)
+            end
+        end)
+                
+        
+    end
+
+    function ElementHandler:SliderFloat(SliderOptions) 
+        local Slider_Element = Instance.new("Frame")
+        local Slider_ElementFrame = Instance.new("Frame")
+        local Slider_ElementSelector = Instance.new("Frame")
+        local Slider_ElementValue = Instance.new("TextLabel")
+        local Slider_ElementOnInput = Instance.new("TextButton")
+        local Slider_ElementName = Instance.new("TextLabel")
+        local Slider_ElementLayout = Instance.new("UIListLayout")
+
+        Slider_Element.Name = "Slider_Element"
+        Slider_Element.Parent = WindowElements
+        Slider_Element.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Slider_Element.BackgroundTransparency = 1.000
+        Slider_Element.Size = UDim2.new(1, 0, 0, 23)
+
+        Slider_ElementFrame.Name = "Slider_ElementFrame"
+        Slider_ElementFrame.Parent = Slider_Element
+        Slider_ElementFrame.BackgroundColor3 = Color3.fromRGB(41, 74, 122)
+        Slider_ElementFrame.BorderColor3 = Color3.fromRGB(74, 74, 83)
+        Slider_ElementFrame.ClipsDescendants = true
+        Slider_ElementFrame.Size = UDim2.new(0.300000012, 0, -3.34800005, 100)
+
+        Slider_ElementSelector.Name = "Slider_ElementSelector"
+        Slider_ElementSelector.Parent = Slider_ElementFrame
+        Slider_ElementSelector.AnchorPoint = Vector2.new(0.5, 0.5)
+        Slider_ElementSelector.BackgroundColor3 = Color3.fromRGB(70, 128, 209)
+        Slider_ElementSelector.BackgroundTransparency = 0.150
+        Slider_ElementSelector.BorderSizePixel = 0
+        Slider_ElementSelector.Position = UDim2.new(0, 10, 0.5, 0)
+        Slider_ElementSelector.Size = UDim2.new(0, 13, 0, 21)
+
+        Slider_ElementValue.Name = "Slider_ElementValue"
+        Slider_ElementValue.Parent = Slider_ElementFrame
+        Slider_ElementValue.AnchorPoint = Vector2.new(0.5, 0.5)
+        Slider_ElementValue.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Slider_ElementValue.BackgroundTransparency = 1.000
+        Slider_ElementValue.Position = UDim2.new(0.5, 0, 0.5, 0)
+        Slider_ElementValue.Size = UDim2.new(1, 0, 1, 0)
+        Slider_ElementValue.FontFace = GetFont()
+        Slider_ElementValue.LineHeight = 0.930
+        Slider_ElementValue.Text = SliderOptions.Default
+        Slider_ElementValue.TextColor3 = Color3.fromRGB(217, 217, 217)
+        Slider_ElementValue.TextSize = 17.000
+
+        Slider_ElementOnInput.Name = "Slider_ElementOnInput"
+        Slider_ElementOnInput.Parent = Slider_ElementFrame
+        Slider_ElementOnInput.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Slider_ElementOnInput.BackgroundTransparency = 1.000
+        Slider_ElementOnInput.Size = UDim2.new(1, 0, 1, 0)
+        Slider_ElementOnInput.FontFace = GetFont()
+        Slider_ElementOnInput.Text = ""
+        Slider_ElementOnInput.TextColor3 = Color3.fromRGB(0, 0, 0)
+        Slider_ElementOnInput.TextSize = 14.000
+
+        Slider_ElementName.Name = "Slider_ElementName"
+        Slider_ElementName.Parent = Slider_Element
+        Slider_ElementName.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Slider_ElementName.BackgroundTransparency = 1.000
+        Slider_ElementName.Position = UDim2.new(2.21000004, 0, 0, 0)
+        Slider_ElementName.Size = UDim2.new(1, 0, 0.0299999993, 20)
+        Slider_ElementName.FontFace = GetFont()
+        Slider_ElementName.Text = SliderOptions.Name
+        Slider_ElementName.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Slider_ElementName.TextSize = 17.000
+        Slider_ElementName.TextXAlignment = Enum.TextXAlignment.Left
+
+        Slider_ElementLayout.Name = "Slider_ElementLayout"
+        Slider_ElementLayout.Parent = Slider_Element
+        Slider_ElementLayout.FillDirection = Enum.FillDirection.Horizontal
+        Slider_ElementLayout.Padding = UDim.new(0, 7)
+
+        local UserInputService = game:GetService("UserInputService")
+
+        local minValue = SliderOptions.Min
+        local maxValue = SliderOptions.Max
+        local decimalPlaces = 3
+        local defaultValue = SliderOptions.Default
+
+        local function updateSlider(input)
+            local sliderWidth = Slider_ElementOnInput.AbsoluteSize.X - 10
+            local sliderPosition = math.clamp(input.Position.X - (Slider_ElementOnInput.AbsolutePosition.X + 5), 0, sliderWidth) / sliderWidth
+            local sliderValue = minValue + (maxValue - minValue) * sliderPosition
+
+            -- Check if the slider selector has reached the start of the slider
+            if sliderPosition <= 0 then
+                sliderPosition = 0
+                sliderValue = minValue
+                -- Check if the slider selector has reached the end of the slider
+            elseif sliderPosition >= 1 then
+                sliderPosition = 1
+                sliderValue = maxValue
+            else
+                -- The slider is in the middle of the track, so update the slider value accordingly
+                sliderValue = minValue + (maxValue - minValue) * sliderPosition
+            end
+
+            Slider_ElementValue.Text = string.format("%."..decimalPlaces.."f", sliderValue)
+            Slider_ElementSelector.Position = UDim2.new(sliderPosition, 0, 0.5, 0)
+
+            pcall(SliderOptions.OnChanged, sliderValue)
+        end
+
+        local function setSliderValue(value)
+            value = math.clamp(value, minValue, maxValue)
+            local sliderPosition = (value - minValue) / (maxValue - minValue)
+            Slider_ElementValue.Text = string.format("%."..decimalPlaces.."f", value)
+            Slider_ElementSelector.Position = UDim2.new(sliderPosition, 0, 0.5, 0)
+        end
+
+        setSliderValue(defaultValue)
+
+        local dragging = false
+
+        Slider_ElementOnInput.MouseButton1Down:Connect(function()
+            dragging = true
+        end)
+
+        Slider_ElementOnInput.MouseButton1Up:Connect(function()
+            dragging = false
+        end)
+
+        Slider_ElementFrame.MouseLeave:Connect(function() 
+            dragging = false
+        end)
+
+        UserInputService.InputChanged:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseMovement and dragging then
+                updateSlider(input)
+            end
+        end)
+    end
+
+    function ElementHandler:SliderInteger(SliderOptions) 
+        local Slider_Element = Instance.new("Frame")
+        local Slider_ElementFrame = Instance.new("Frame")
+        local Slider_ElementSelector = Instance.new("Frame")
+        local Slider_ElementValue = Instance.new("TextLabel")
+        local Slider_ElementOnInput = Instance.new("TextButton")
+        local Slider_ElementName = Instance.new("TextLabel")
+        local Slider_ElementLayout = Instance.new("UIListLayout")
+
+        Slider_Element.Name = "Slider_Element"
+        Slider_Element.Parent = WindowElements
+        Slider_Element.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Slider_Element.BackgroundTransparency = 1.000
+        Slider_Element.Size = UDim2.new(1, 0, 0, 23)
+
+        Slider_ElementFrame.Name = "Slider_ElementFrame"
+        Slider_ElementFrame.Parent = Slider_Element
+        Slider_ElementFrame.BackgroundColor3 = Color3.fromRGB(41, 74, 122)
+        Slider_ElementFrame.BorderColor3 = Color3.fromRGB(74, 74, 83)
+        Slider_ElementFrame.ClipsDescendants = true
+        Slider_ElementFrame.Size = UDim2.new(0.300000012, 0, -3.34800005, 100)
+
+        Slider_ElementSelector.Name = "Slider_ElementSelector"
+        Slider_ElementSelector.Parent = Slider_ElementFrame
+        Slider_ElementSelector.AnchorPoint = Vector2.new(0.5, 0.5)
+        Slider_ElementSelector.BackgroundColor3 = Color3.fromRGB(70, 128, 209)
+        Slider_ElementSelector.BackgroundTransparency = 0.150
+        Slider_ElementSelector.BorderSizePixel = 0
+        Slider_ElementSelector.Position = UDim2.new(0, 10, 0.5, 0)
+        Slider_ElementSelector.Size = UDim2.new(0, 13, 0, 21)
+
+        Slider_ElementValue.Name = "Slider_ElementValue"
+        Slider_ElementValue.Parent = Slider_ElementFrame
+        Slider_ElementValue.AnchorPoint = Vector2.new(0.5, 0.5)
+        Slider_ElementValue.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Slider_ElementValue.BackgroundTransparency = 1.000
+        Slider_ElementValue.Position = UDim2.new(0.5, 0, 0.5, 0)
+        Slider_ElementValue.Size = UDim2.new(1, 0, 1, 0)
+        Slider_ElementValue.FontFace = GetFont()
+        Slider_ElementValue.LineHeight = 0.930
+        Slider_ElementValue.Text = SliderOptions.Default
+        Slider_ElementValue.TextColor3 = Color3.fromRGB(217, 217, 217)
+        Slider_ElementValue.TextSize = 17.000
+
+        Slider_ElementOnInput.Name = "Slider_ElementOnInput"
+        Slider_ElementOnInput.Parent = Slider_ElementFrame
+        Slider_ElementOnInput.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Slider_ElementOnInput.BackgroundTransparency = 1.000
+        Slider_ElementOnInput.Size = UDim2.new(1, 0, 1, 0)
+        Slider_ElementOnInput.FontFace = GetFont()
+        Slider_ElementOnInput.Text = ""
+        Slider_ElementOnInput.TextColor3 = Color3.fromRGB(0, 0, 0)
+        Slider_ElementOnInput.TextSize = 14.000
+
+        Slider_ElementName.Name = "Slider_ElementName"
+        Slider_ElementName.Parent = Slider_Element
+        Slider_ElementName.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Slider_ElementName.BackgroundTransparency = 1.000
+        Slider_ElementName.Position = UDim2.new(2.21000004, 0, 0, 0)
+        Slider_ElementName.Size = UDim2.new(1, 0, 0.0299999993, 20)
+        Slider_ElementName.FontFace = GetFont()
+        Slider_ElementName.Text = SliderOptions.Name
+        Slider_ElementName.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Slider_ElementName.TextSize = 17.000
+        Slider_ElementName.TextXAlignment = Enum.TextXAlignment.Left
+
+        Slider_ElementLayout.Name = "Slider_ElementLayout"
+        Slider_ElementLayout.Parent = Slider_Element
+        Slider_ElementLayout.FillDirection = Enum.FillDirection.Horizontal
+        Slider_ElementLayout.Padding = UDim.new(0, 7)
+
+        local UserInputService = game:GetService("UserInputService")
+
+        local minValue = SliderOptions.Min
+        local maxValue = SliderOptions.Max
+        local decimalPlaces = 0
+        local defaultValue = SliderOptions.Default
+
+        local function updateSlider(input)
+            local sliderWidth = Slider_ElementOnInput.AbsoluteSize.X - 10
+            local sliderPosition = math.clamp(input.Position.X - (Slider_ElementOnInput.AbsolutePosition.X + 5), 0, sliderWidth) / sliderWidth
+            local sliderValue = minValue + (maxValue - minValue) * sliderPosition
+
+            -- Check if the slider selector has reached the start of the slider
+            if sliderPosition <= 0 then
+                sliderPosition = 0
+                sliderValue = minValue
+                -- Check if the slider selector has reached the end of the slider
+            elseif sliderPosition >= 1 then
+                sliderPosition = 1
+                sliderValue = maxValue
+            else
+                -- The slider is in the middle of the track, so update the slider value accordingly
+                sliderValue = math.floor(minValue + (maxValue - minValue) * sliderPosition)
+            end
+
+            Slider_ElementValue.Text = string.format("%."..decimalPlaces.."f", sliderValue)
+            Slider_ElementSelector.Position = UDim2.new(sliderPosition, 0, 0.5, 0)
+
+            pcall(SliderOptions.OnChanged, sliderValue)
+        end
+
+        local function setSliderValue(value)
+            value = math.clamp(value, minValue, maxValue)
+            local sliderPosition = (value - minValue) / (maxValue - minValue)
+            Slider_ElementValue.Text = string.format("%."..decimalPlaces.."f", value)
+            Slider_ElementSelector.Position = UDim2.new(sliderPosition, 0, 0.5, 0)
+        end
+
+        setSliderValue(defaultValue)
+
+        local dragging = false
+
+        Slider_ElementOnInput.MouseButton1Down:Connect(function()
+            dragging = true
+        end)
+
+        Slider_ElementOnInput.MouseButton1Up:Connect(function()
+            dragging = false
+        end)
+
+        Slider_ElementFrame.MouseLeave:Connect(function() 
+            dragging = false
+        end)
+
+        UserInputService.InputChanged:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseMovement and dragging then
+                updateSlider(input)
+            end
+        end)
+    end
+
+    function ElementHandler:CheckBox(CheckBoxOptions) 
+        local CheckBox_Element = Instance.new("Frame")
+        local CheckBox_ElementLayout = Instance.new("UIListLayout")
+        local CheckBox_ElementBox = Instance.new("Frame")
+        local CheckBox_ElementBoxInput = Instance.new("TextButton")
+        local CheckBox_ElementImage = Instance.new("ImageLabel")
+        local CheckBox_ElementName = Instance.new("TextLabel")
+
+        local Enabled = CheckBoxOptions.Enabled
+
+        CheckBox_Element.Name = "CheckBox_Element"
+        CheckBox_Element.Parent = WindowElements
+        CheckBox_Element.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        CheckBox_Element.BackgroundTransparency = 1.000
+        CheckBox_Element.Size = UDim2.new(1, 0, 0, 23)
+        
+        CheckBox_ElementLayout.Name = "CheckBox_ElementLayout"
+        CheckBox_ElementLayout.Parent = CheckBox_Element
+        CheckBox_ElementLayout.FillDirection = Enum.FillDirection.Horizontal
+        CheckBox_ElementLayout.SortOrder = Enum.SortOrder.LayoutOrder
+        CheckBox_ElementLayout.Padding = UDim.new(0, 10)
+        
+        CheckBox_ElementBox.Name = "CheckBox_ElementBox"
+        CheckBox_ElementBox.Parent = CheckBox_Element
+        CheckBox_ElementBox.BackgroundColor3 = Color3.fromRGB(36, 65, 106)
+        CheckBox_ElementBox.BorderColor3 = Color3.fromRGB(74, 74, 83)
+        CheckBox_ElementBox.Size = UDim2.new(0, 22, 0, 22)
+        
+        CheckBox_ElementBoxInput.Name = "CheckBox_ElementBoxInput"
+        CheckBox_ElementBoxInput.Parent = CheckBox_ElementBox
+        CheckBox_ElementBoxInput.AnchorPoint = Vector2.new(0.5, 0.5)
+        CheckBox_ElementBoxInput.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        CheckBox_ElementBoxInput.BackgroundTransparency = 1.000
+        CheckBox_ElementBoxInput.Position = UDim2.new(0.5, 0, 0.5, 0)
+        CheckBox_ElementBoxInput.Size = UDim2.new(1, 0, 1, 0)
+        CheckBox_ElementBoxInput.FontFace = GetFont()
+        CheckBox_ElementBoxInput.Text = ""
+        CheckBox_ElementBoxInput.TextColor3 = Color3.fromRGB(0, 0, 0)
+        CheckBox_ElementBoxInput.TextSize = 14.000
+        
+        CheckBox_ElementImage.Name = "CheckBox_ElementImage"
+        CheckBox_ElementImage.Parent = CheckBox_ElementBox
+        CheckBox_ElementImage.AnchorPoint = Vector2.new(0.5, 0.5)
+        CheckBox_ElementImage.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        CheckBox_ElementImage.BackgroundTransparency = 1.000
+        CheckBox_ElementImage.Position = UDim2.new(0.5, 0, 0.5, 0)
+        CheckBox_ElementImage.Size = UDim2.new(0, 14, 0, 16)
+        CheckBox_ElementImage.Image = "rbxassetid://13058405207"
+        
+        CheckBox_ElementName.Name = "CheckBox_ElementName"
+        CheckBox_ElementName.Parent = CheckBox_Element
+        CheckBox_ElementName.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        CheckBox_ElementName.BackgroundTransparency = 1.000
+        CheckBox_ElementName.Size = UDim2.new(1, 0, 0, 20)
+        CheckBox_ElementName.FontFace = GetFont()
+        CheckBox_ElementName.Text = CheckBoxOptions.Name
+        CheckBox_ElementName.TextColor3 = Color3.fromRGB(255, 255, 255)
+        CheckBox_ElementName.TextSize = 17.000
+        CheckBox_ElementName.TextXAlignment = Enum.TextXAlignment.Left
+                
+        if Enabled then
+            CheckBox_ElementImage.Visible = true
+            pcall(CheckBoxOptions.OnChanged, Enabled)
+        else
+            CheckBox_ElementImage.Visible = false
+            pcall(CheckBoxOptions.OnChanged, Enabled)
+        end
+
+        CheckBox_ElementBoxInput.MouseButton1Click:Connect(function()
+            Enabled = not Enabled
+
+            if Enabled then
+                CheckBox_ElementImage.Visible = true
+            else
+                CheckBox_ElementImage.Visible = false
+            end
+
+            pcall(CheckBoxOptions.OnChanged, Enabled)
+        end)
+    end
+    
+    function ElementHandler:Seperator() 
+        local Seperator_Element = Instance.new("Frame")
+        
+        Seperator_Element.Name = "Seperator_Element"
+        Seperator_Element.Parent = WindowElements
+        Seperator_Element.BackgroundColor3 = Color3.fromRGB(74, 74, 83)
+        Seperator_Element.BorderColor3 = Color3.fromRGB(27, 42, 53)
+        Seperator_Element.BorderSizePixel = 0
+        Seperator_Element.Size = UDim2.new(1, 0, 0, 1)
+    end
+
+    function ElementHandler:ColorPicker3(ColorPickerArgs) 
+        local Color_Element = Instance.new("Frame")
+        local Color_ElementLayout = Instance.new("UIListLayout")
+        local Color_ElementRed = Instance.new("Frame")
+        local Color_ElementRedTextInput = Instance.new("TextBox")
+        local Color_ElementRedButtonInput = Instance.new("TextButton")
+        local Color_ElementGreen = Instance.new("Frame")
+        local Color_ElementGreenTextInput = Instance.new("TextBox")
+        local Color_ElementGreenButtonInput = Instance.new("TextButton")
+        local Color_ElementBlue = Instance.new("Frame")
+        local Color_ElementBlueTextInput = Instance.new("TextBox")
+        local Color_ElementBlueButtonInput = Instance.new("TextButton")
+        local Color_ElementDisplay = Instance.new("Frame")
+        local Color_ElementName = Instance.new("TextLabel")
+
+        local ColorPickerName = ColorPickerArgs.Name
+
+        Color_Element.Name = "Color_Element"
+        Color_Element.Parent = WindowElements
+        Color_Element.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Color_Element.BackgroundTransparency = 1.000
+        Color_Element.Position = UDim2.new(0, 0, 0.49666667, 0)
+        Color_Element.Size = UDim2.new(1, 0, 0, 23)
+
+        Color_ElementLayout.Name = "Color_ElementLayout"
+        Color_ElementLayout.Parent = Color_Element
+        Color_ElementLayout.FillDirection = Enum.FillDirection.Horizontal
+        Color_ElementLayout.SortOrder = Enum.SortOrder.LayoutOrder
+        Color_ElementLayout.Padding = UDim.new(0, 7)
+
+        Color_ElementRed.Name = "Color_ElementRed"
+        Color_ElementRed.Parent = Color_Element
+        Color_ElementRed.BackgroundColor3 = Color3.fromRGB(41, 74, 122)
+        Color_ElementRed.BorderColor3 = Color3.fromRGB(74, 74, 83)
+        Color_ElementRed.Size = UDim2.new(0, 60, 1, 0)
+
+        Color_ElementRedTextInput.Name = "Color_ElementRedTextInput"
+        Color_ElementRedTextInput.Parent = Color_ElementRed
+        Color_ElementRedTextInput.AnchorPoint = Vector2.new(0.5, 0.5)
+        Color_ElementRedTextInput.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Color_ElementRedTextInput.BackgroundTransparency = 1.000
+        Color_ElementRedTextInput.Position = UDim2.new(0.5, 0, 0.5, 0)
+        Color_ElementRedTextInput.Size = UDim2.new(0, 25, 1, 0)
+        Color_ElementRedTextInput.FontFace = GetFont()
+        Color_ElementRedTextInput.PlaceholderColor3 = Color3.fromRGB(255, 255, 255)
+        Color_ElementRedTextInput.PlaceholderText = "R:255"
+        Color_ElementRedTextInput.Text = "R:255"
+        Color_ElementRedTextInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Color_ElementRedTextInput.TextSize = 17.000
+
+        Color_ElementRedButtonInput.Name = "Color_ElementRedButtonInput"
+        Color_ElementRedButtonInput.Parent = Color_ElementRed
+        Color_ElementRedButtonInput.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Color_ElementRedButtonInput.BackgroundTransparency = 1.000
+        Color_ElementRedButtonInput.Size = UDim2.new(1, 0, 1, 0)
+        Color_ElementRedButtonInput.FontFace = GetFont()
+        Color_ElementRedButtonInput.Text = ""
+        Color_ElementRedButtonInput.TextColor3 = Color3.fromRGB(0, 0, 0)
+        Color_ElementRedButtonInput.TextSize = 14.000
+
+        Color_ElementGreen.Name = "Color_ElementGreen"
+        Color_ElementGreen.Parent = Color_Element
+        Color_ElementGreen.BackgroundColor3 = Color3.fromRGB(41, 74, 122)
+        Color_ElementGreen.BorderColor3 = Color3.fromRGB(74, 74, 83)
+        Color_ElementGreen.Size = UDim2.new(0, 60, 1, 0)
+
+        Color_ElementGreenTextInput.Name = "Color_ElementGreenTextInput"
+        Color_ElementGreenTextInput.Parent = Color_ElementGreen
+        Color_ElementGreenTextInput.AnchorPoint = Vector2.new(0.5, 0.5)
+        Color_ElementGreenTextInput.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Color_ElementGreenTextInput.BackgroundTransparency = 1.000
+        Color_ElementGreenTextInput.Position = UDim2.new(0.5, 0, 0.5, 0)
+        Color_ElementGreenTextInput.Size = UDim2.new(0, 25, 1, 0)
+        Color_ElementGreenTextInput.FontFace = GetFont()
+        Color_ElementGreenTextInput.PlaceholderColor3 = Color3.fromRGB(255, 255, 255)
+        Color_ElementGreenTextInput.PlaceholderText = "G:255"
+        Color_ElementGreenTextInput.Text = "G:255"
+        Color_ElementGreenTextInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Color_ElementGreenTextInput.TextSize = 17.000
+
+        Color_ElementGreenButtonInput.Name = "Color_ElementGreenButtonInput"
+        Color_ElementGreenButtonInput.Parent = Color_ElementGreen
+        Color_ElementGreenButtonInput.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Color_ElementGreenButtonInput.BackgroundTransparency = 1.000
+        Color_ElementGreenButtonInput.Size = UDim2.new(1, 0, 1, 0)
+        Color_ElementGreenButtonInput.FontFace = GetFont()
+        Color_ElementGreenButtonInput.Text = ""
+        Color_ElementGreenButtonInput.TextColor3 = Color3.fromRGB(0, 0, 0)
+        Color_ElementGreenButtonInput.TextSize = 14.000
+
+        Color_ElementBlue.Name = "Color_ElementBlue"
+        Color_ElementBlue.Parent = Color_Element
+        Color_ElementBlue.BackgroundColor3 = Color3.fromRGB(41, 74, 122)
+        Color_ElementBlue.BorderColor3 = Color3.fromRGB(74, 74, 83)
+        Color_ElementBlue.Size = UDim2.new(0, 60, 1, 0)
+
+        Color_ElementBlueTextInput.Name = "Color_ElementBlueTextInput"
+        Color_ElementBlueTextInput.Parent = Color_ElementBlue
+        Color_ElementBlueTextInput.AnchorPoint = Vector2.new(0.5, 0.5)
+        Color_ElementBlueTextInput.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Color_ElementBlueTextInput.BackgroundTransparency = 1.000
+        Color_ElementBlueTextInput.Position = UDim2.new(0.5, 0, 0.5, 0)
+        Color_ElementBlueTextInput.Size = UDim2.new(0, 25, 1, 0)
+        Color_ElementBlueTextInput.FontFace = GetFont()
+        Color_ElementBlueTextInput.PlaceholderColor3 = Color3.fromRGB(255, 255, 255)
+        Color_ElementBlueTextInput.PlaceholderText = "B:255"
+        Color_ElementBlueTextInput.Text = "B:255"
+        Color_ElementBlueTextInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Color_ElementBlueTextInput.TextSize = 17.000
+
+        Color_ElementBlueButtonInput.Name = "Color_ElementBlueButtonInput"
+        Color_ElementBlueButtonInput.Parent = Color_ElementBlue
+        Color_ElementBlueButtonInput.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Color_ElementBlueButtonInput.BackgroundTransparency = 1.000
+        Color_ElementBlueButtonInput.Size = UDim2.new(1, 0, 1, 0)
+        Color_ElementBlueButtonInput.FontFace = GetFont()
+        Color_ElementBlueButtonInput.Text = ""
+        Color_ElementBlueButtonInput.TextColor3 = Color3.fromRGB(0, 0, 0)
+        Color_ElementBlueButtonInput.TextSize = 14.000
+
+        Color_ElementDisplay.Name = "Color_ElementDisplay"
+        Color_ElementDisplay.Parent = Color_Element
+        Color_ElementDisplay.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Color_ElementDisplay.BorderColor3 = Color3.fromRGB(74, 74, 83)
+        Color_ElementDisplay.Size = UDim2.new(0, 23, 0, 23)
+
+        Color_ElementName.Name = "Color_ElementName"
+        Color_ElementName.Parent = Color_Element
+        Color_ElementName.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Color_ElementName.BackgroundTransparency = 1.000
+        Color_ElementName.Position = UDim2.new(2.21000075, 0, 0, 0)
+        Color_ElementName.Size = UDim2.new(1, 0, 0, 23)
+        Color_ElementName.FontFace = GetFont()
+        Color_ElementName.Text = ColorPickerName
+        Color_ElementName.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Color_ElementName.TextSize = 17.000
+        Color_ElementName.TextXAlignment = Enum.TextXAlignment.Left
+
+        local UIS = game:GetService("UserInputService")
+        local CurrentColor = ColorPickerArgs.DefaultColor or Color3.fromRGB(255, 255, 255)
+
+        local R, G, B = CurrentColor.R, CurrentColor.G, CurrentColor.B;
+
+        local function setColor()
+            Color_ElementDisplay.BackgroundColor3 = CurrentColor
+            pcall(ColorPickerArgs.OnChanged, CurrentColor)
+        end
+
+        local function updateColor()
+            CurrentColor = Color3.fromRGB(R, G, B)
+
+            setColor()
+        end
+
+        setColor()
+
+        Color_ElementRedTextInput.Text = string.format("R:%.0f", Color_ElementDisplay.BackgroundColor3.R);
+        Color_ElementGreenTextInput.Text = string.format("G:%.0f", Color_ElementDisplay.BackgroundColor3.G);
+        Color_ElementBlueTextInput.Text = string.format("B:%.0f", Color_ElementDisplay.BackgroundColor3.B);
+
+        for _, colorButton in pairs(Color_Element:GetDescendants()) do
+            if colorButton:IsA("TextButton") then
+                colorButton.MouseButton1Down:Connect(function()
+                    while UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
+                        local x = math.clamp(UIS:GetMouseLocation().X - colorButton.AbsolutePosition.X, 0, colorButton.AbsoluteSize.X)
+                        local value = math.floor(x / colorButton.AbsoluteSize.X * 255 + 0.5)
+                        local color = string.sub(colorButton.Name, 14, 14)
+
+                        if color == "R" then
+                            R = value
+                            Color_ElementRedTextInput.Text = string.format("R:%s", value);
+                            updateColor()
+                        elseif color == "G" then
+                            G = value
+                            Color_ElementGreenTextInput.Text = string.format("G:%s", value);
+                            updateColor()
+                        elseif color == "B" then
+                            B = value
+                            Color_ElementBlueTextInput.Text = string.format("B:%s", value);
+                            updateColor()
+                        end
+
+                        task.wait()
+                    end
+                end)
+            end
+        end
+    end
+
+    function ElementHandler:RadioButtons(RadioButtonsArgs) 
+        local Radio_Element = Instance.new("Frame")
+        local Radio_ElementLayout = Instance.new("UIListLayout")
+
+        Radio_Element.Name = "Radio_Element"
+        Radio_Element.Parent = WindowElements
+        Radio_Element.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Radio_Element.BackgroundTransparency = 1.000
+        Radio_Element.Position = UDim2.new(0, 0, 0.49666667, 0)
+        Radio_Element.Size = UDim2.new(1, 0, 0, 23)
+
+        Radio_ElementLayout.Name = "Radio_ElementLayout"
+        Radio_ElementLayout.Parent = Radio_Element
+        Radio_ElementLayout.FillDirection = Enum.FillDirection.Horizontal
+        Radio_ElementLayout.SortOrder = Enum.SortOrder.LayoutOrder
+        Radio_ElementLayout.Padding = UDim.new(0, 7)
+
+        local Default = RadioButtonsArgs.Default
+        local RadioButtons = {}
+
+        for i, radio in pairs(RadioButtonsArgs.Buttons) do 
+            local Radio_ElementItem = Instance.new("Frame")
+            local Radio_ElementItemLayout = Instance.new("UIListLayout")
+            local Radio_ElementItemButton = Instance.new("Frame")
+            local Radio_ElementItemButtonCorner = Instance.new("UICorner")
+            local Radio_ElementItemButtonState = Instance.new("Frame")
+            local Radio_ElementItemButtonStateCorner = Instance.new("UICorner")
+            local Radio_ElementItemButtonInput = Instance.new("TextButton")
+            local Radio_ElementItemName = Instance.new("TextLabel")
+            local RadioEnabled = false
+
+            Radio_Element.Name = "Radio_Element"
+            Radio_Element.Parent = WindowElements
+            Radio_Element.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+            Radio_Element.BackgroundTransparency = 1.000
+            Radio_Element.Position = UDim2.new(0, 0, 0.49666667, 0)
+            Radio_Element.Size = UDim2.new(1, 0, 0, 23)
+
+            Radio_ElementItemName.Name = "Radio_ElementItemName"
+            Radio_ElementItemName.Parent = Radio_ElementItem
+            Radio_ElementItemName.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+            Radio_ElementItemName.BackgroundTransparency = 1.000
+            Radio_ElementItemName.Position = UDim2.new(0.240384609, 0, 0, 0)
+            Radio_ElementItemName.Size = UDim2.new(0.644999981, 0, 1, 0)
+            Radio_ElementItemName.FontFace = GetFont()
+            Radio_ElementItemName.Text = radio
+            Radio_ElementItemName.TextColor3 = Color3.fromRGB(255, 255, 255)
+            Radio_ElementItemName.TextSize = 17.000
+            Radio_ElementItemName.TextXAlignment = Enum.TextXAlignment.Left
+
+            Radio_ElementLayout.Name = "Radio_ElementLayout"
+            Radio_ElementLayout.Parent = Radio_Element
+            Radio_ElementLayout.FillDirection = Enum.FillDirection.Horizontal
+            Radio_ElementLayout.SortOrder = Enum.SortOrder.LayoutOrder
+            Radio_ElementLayout.Padding = UDim.new(0, 7)
+
+            Radio_ElementItem.Name = "Radio_ElementItem"
+            Radio_ElementItem.Parent = Radio_Element
+            Radio_ElementItem.BackgroundColor3 = Color3.fromRGB(41, 74, 122)
+            Radio_ElementItem.BackgroundTransparency = 1.000
+            Radio_ElementItem.Size = UDim2.new(0, 23 + (Radio_ElementItemName.TextBounds.X) + 7, 1, 0)
+
+            Radio_ElementItemLayout.Name = "Radio_ElementItemLayout"
+            Radio_ElementItemLayout.Parent = Radio_ElementItem
+            Radio_ElementItemLayout.FillDirection = Enum.FillDirection.Horizontal
+            Radio_ElementItemLayout.SortOrder = Enum.SortOrder.LayoutOrder
+            Radio_ElementItemLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+            Radio_ElementItemLayout.Padding = UDim.new(0, 7)
+
+            Radio_ElementItemButton.Name = "Radio_ElementItemButton"
+            Radio_ElementItemButton.Parent = Radio_ElementItem
+            Radio_ElementItemButton.BackgroundColor3 = Color3.fromRGB(41, 74, 122)
+            Radio_ElementItemButton.Size = UDim2.new(0, 18, 0, 18)
+
+            Radio_ElementItemButtonCorner.CornerRadius = UDim.new(1, 0)
+            Radio_ElementItemButtonCorner.Name = "Radio_ElementItemButtonCorner"
+            Radio_ElementItemButtonCorner.Parent = Radio_ElementItemButton
+
+            Radio_ElementItemButtonState.Name = "Radio_ElementItemButtonState"
+            Radio_ElementItemButtonState.Parent = Radio_ElementItemButton
+            Radio_ElementItemButtonState.AnchorPoint = Vector2.new(0.5, 0.5)
+            Radio_ElementItemButtonState.BackgroundColor3 = Color3.fromRGB(66, 120, 196)
+            Radio_ElementItemButtonState.Position = UDim2.new(0.5, 0, 0.5, 0)
+            Radio_ElementItemButtonState.Size = UDim2.new(0, 14, 0, 14)
+
+            Radio_ElementItemButtonStateCorner.CornerRadius = UDim.new(1, 0)
+            Radio_ElementItemButtonStateCorner.Name = "Radio_ElementItemButtonStateCorner"
+            Radio_ElementItemButtonStateCorner.Parent = Radio_ElementItemButtonState
+
+            Radio_ElementItemButtonInput.Name = "Radio_ElementItemButtonInput"
+            Radio_ElementItemButtonInput.Parent = Radio_ElementItemButton
+            Radio_ElementItemButtonInput.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+            Radio_ElementItemButtonInput.BackgroundTransparency = 1.000
+            Radio_ElementItemButtonInput.Size = UDim2.new(1, 0, 1, 0)
+            Radio_ElementItemButtonInput.FontFace = GetFont()
+            Radio_ElementItemButtonInput.Text = ""
+            Radio_ElementItemButtonInput.TextColor3 = Color3.fromRGB(0, 0, 0)
+            Radio_ElementItemButtonInput.TextSize = 14.000
+
+            if radio == Default then 
+                RadioEnabled = true
+                Radio_ElementItemButtonState.Visible = true;
+            else
+                RadioEnabled = false
+                Radio_ElementItemButtonState.Visible = false;
+            end
+
+            local radioButton = {
+                Name = radio,
+                Enabled = RadioEnabled,
+                Update = nil
+            }
+
+            radioButton.Update = function() 
+                if radioButton.Enabled then
+                    Radio_ElementItemButtonState.Visible = true;
+                else
+                    Radio_ElementItemButtonState.Visible = false;
+                end
+            end
+
+            Radio_ElementItemButtonInput.MouseButton1Click:Connect(function()
+                if not radioButton.Enabled then  -- only do something if the button is not already selected
+                    radioButton.Enabled = true
+                    radioButton.Update()
+                    pcall(RadioButtonsArgs.OnChanged, radioButton.Name, radioButton.Enabled)
+                    for _, rad in pairs(RadioButtons) do 
+                        if rad ~= radioButton then  -- deselect other buttons
+                            rad.Enabled = false
+                            rad.Update()
+                        end
+                    end
+                end
+            end)
+
+            table.insert(RadioButtons, radioButton)
+        end
+        
+    end
+
+    function ElementHandler:SinWaveGraph(SinWaveGraphArgs) 
+        local SinWaveGraph_Element = Instance.new("Frame")
+        local SinWaveGraph_ElementLayout = Instance.new("UIListLayout")
+        local SinWaveGraph_ElementDisplay = Instance.new("Frame")
+        local SinWaveGraph_ElementDisplayName = Instance.new("TextLabel")
+
+        local Value = SinWaveGraphArgs.Value
+        local MaxHeight = SinWaveGraphArgs.MaxHeight
+        local Frequency = SinWaveGraphArgs.Frequency
+
+        SinWaveGraph_Element.Name = "SinWaveGraph_Element"
+        SinWaveGraph_Element.Parent = WindowElements
+        SinWaveGraph_Element.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        SinWaveGraph_Element.BackgroundTransparency = 1.000
+        SinWaveGraph_Element.Position = UDim2.new(0, 0, 0.689999998, 0)
+        SinWaveGraph_Element.Size = UDim2.new(1, 0, 0.226666749, 23)
+
+        SinWaveGraph_ElementLayout.Name = "SinWaveGraph_ElementLayout"
+        SinWaveGraph_ElementLayout.Parent = SinWaveGraph_Element
+        SinWaveGraph_ElementLayout.SortOrder = Enum.SortOrder.Name
+        SinWaveGraph_ElementLayout.Padding = UDim.new(0, 10)
+
+        SinWaveGraph_ElementDisplay.Name = "SinWaveGraph_ElementDisplay"
+        SinWaveGraph_ElementDisplay.Parent = SinWaveGraph_Element
+        SinWaveGraph_ElementDisplay.BackgroundColor3 = Color3.fromRGB(41, 74, 122)
+        SinWaveGraph_ElementDisplay.BorderColor3 = Color3.fromRGB(74, 74, 83)
+        SinWaveGraph_ElementDisplay.Position = UDim2.new(0, 0, 0.423953384, 0)
+        SinWaveGraph_ElementDisplay.Size = UDim2.new(0.370000005, 0, 0, 60)
+        SinWaveGraph_ElementDisplay.ClipsDescendants = true
+
+        SinWaveGraph_ElementDisplayName.Name = "ASinWaveGraph_ElementName"
+        SinWaveGraph_ElementDisplayName.Parent = SinWaveGraph_Element
+        SinWaveGraph_ElementDisplayName.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        SinWaveGraph_ElementDisplayName.BackgroundTransparency = 1.000
+        SinWaveGraph_ElementDisplayName.Position = UDim2.new(0, (SinWaveGraph_ElementDisplay.AbsoluteSize.X + 15), 0, 20)
+        SinWaveGraph_ElementDisplayName.Size = UDim2.new(1, 0, 0, 20)
+        SinWaveGraph_ElementDisplayName.FontFace = GetFont()
+        SinWaveGraph_ElementDisplayName.Text = SinWaveGraphArgs.Name
+        SinWaveGraph_ElementDisplayName.TextColor3 = Color3.fromRGB(255, 255, 255)
+        SinWaveGraph_ElementDisplayName.TextSize = 17.000
+        SinWaveGraph_ElementDisplayName.TextXAlignment = Enum.TextXAlignment.Left
+
+        SinWaveGraph_ElementDisplay:GetPropertyChangedSignal("Size"):Connect(function()
+            SinWaveGraph_ElementDisplayName.Position = UDim2.new(0, (SinWaveGraph_ElementDisplay.Size.X + 15), 0, 20)
+        end)
+
+        local trail = Instance.new("Folder")
+        trail.Name = "PlotGraph"
+        trail.Parent = SinWaveGraph_ElementDisplay
+        for i = 1, 200 do
+            local point = Instance.new("Frame")
+            point.Size = UDim2.new(0, 1, 0, 1)
+            point.Position = UDim2.new((i-1)/200, 0, 0.5, 0)
+            point.BackgroundColor3 = Color3.new(1, 1, 1)
+            point.BorderSizePixel = 0
+            point.Parent = trail
+        end
+
+        local function updateTrail(value, maxHeight, frequency)
+            for i, point in ipairs(trail:GetChildren()) do
+                local y = math.sin(i/200*math.pi*2*frequency + value)*20 + 25
+                y = math.clamp(y, 0, maxHeight)
+
+                point.Position = UDim2.new((i-1)/200, 0, y/50, 0)
+            end
+            return value
+        end
+
+        while true do
+            Value = updateTrail(Value + 0.06, MaxHeight, Frequency)
+            pcall(SinWaveGraphArgs.OnChanged, Value)
+            task.wait()
+        end
+
+
+    end
+
+    function ElementHandler:BeginMenuBar() 
+        local MenuBar = Instance.new("Frame")
+        local MenuBarLayout = Instance.new("UIListLayout")
+
+        MenuBar.Name = "MenuBar"
+        MenuBar.Parent = WindowElementContainer
+        MenuBar.BackgroundColor3 = Color3.fromRGB(44, 46, 48)
+        MenuBar.BorderColor3 = Color3.fromRGB(74, 74, 83)
+        MenuBar.Position = UDim2.new(-0.048780486, 0, 0.0417362265, 0)
+        MenuBar.Size = UDim2.new(1, 0, 0, 23)
+
+        MenuBarLayout.Name = "MenuBarLayout"
+        MenuBarLayout.Parent = MenuBar
+        MenuBarLayout.FillDirection = Enum.FillDirection.Horizontal
+        MenuBarLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+        local currentlyOpen = false
+
+        function ElementHandler:BeginMenu(MenuName) 
+            local MenuBarItem = Instance.new("TextButton")
+
+            MenuBarItem.Name = MenuName
+            MenuBarItem.Parent = MenuBar
+            MenuBarItem.BackgroundColor3 = Color3.fromRGB(44, 46, 48)
+            MenuBarItem.BorderSizePixel = 0
+            MenuBarItem.Size = UDim2.new(0, (MenuBarItem.TextBounds.X + 5), 1, 0)
+            MenuBarItem.FontFace = GetFont()
+            MenuBarItem.Text = MenuName
+            MenuBarItem.TextColor3 = Color3.fromRGB(255, 255, 255)
+            MenuBarItem.TextSize = 17.000
+
+            local Open = false
+
+            MenuBarItem.MouseButton1Click:Connect(function()
+                Open = not Open
+            end)
+
+            function ElementHandler:MenuItem(ItemProperties) 
+
+                local MenuBarItem_Items = Instance.new("Frame")
+                local MenuBarItem_Items_2 = Instance.new("UIListLayout")
+                local MenuBarItem_Items_ItemMain = Instance.new("TextButton")
+                local MenuBarItem_Items_ItemMainPadding = Instance.new("UIPadding")
+                local MenuBarItem_ItemsPadding = Instance.new("UIPadding")
+                local MenuBarPadding = Instance.new("UIPadding")
+
+                MenuBarItem_Items.Name = "MenuBarItem_Items"
+                MenuBarItem_Items.Parent = MenuBar:FindFirstChild(ItemProperties.Menu)
+                MenuBarItem_Items.BackgroundColor3 = Color3.fromRGB(25, 26, 27)
+                MenuBarItem_Items.BackgroundTransparency = 0.050
+                MenuBarItem_Items.BorderColor3 = Color3.fromRGB(74, 74, 83)
+                MenuBarItem_Items.Position = UDim2.new(0, 0, 1, 1)
+                MenuBarItem_Items.Size = UDim2.new(0, 100, 0, 23)
+                MenuBarItem_Items.Visible = Open
+
+                local function Update() 
+                    MenuBarItem_Items.Visible = Open
+                end
+
+                MenuBarItem_Items_2.Name = "MenuBarItem_Items"
+                MenuBarItem_Items_2.Parent = MenuBarItem_Items
+                MenuBarItem_Items_2.SortOrder = Enum.SortOrder.LayoutOrder
+
+                MenuBarItem_Items_ItemMain.Name = "MenuBarItem_Items_ItemMain"
+                MenuBarItem_Items_ItemMain.Parent = MenuBarItem_Items
+                MenuBarItem_Items_ItemMain.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+                MenuBarItem_Items_ItemMain.BackgroundTransparency = 1.000
+                MenuBarItem_Items_ItemMain.Size = UDim2.new(1, 0, 0, 20)
+                MenuBarItem_Items_ItemMain.FontFace = GetFont()
+                MenuBarItem_Items_ItemMain.Text = ItemProperties.Name
+                MenuBarItem_Items_ItemMain.TextColor3 = Color3.fromRGB(255, 255, 255)
+                MenuBarItem_Items_ItemMain.TextSize = 16.000
+                MenuBarItem_Items_ItemMain.TextXAlignment = Enum.TextXAlignment.Left
+
+                MenuBarItem_Items_ItemMainPadding.Name = "MenuBarItem_Items_ItemMainPadding"
+                MenuBarItem_Items_ItemMainPadding.Parent = MenuBarItem_Items_ItemMain
+                MenuBarItem_Items_ItemMainPadding.PaddingLeft = UDim.new(0, 5)
+
+                MenuBarItem_ItemsPadding.Name = "MenuBarItem_ItemsPadding"
+                MenuBarItem_ItemsPadding.Parent = MenuBarItem_Items
+                MenuBarItem_ItemsPadding.PaddingTop = UDim.new(0, 3)
+
+                MenuBarPadding.Name = "MenuBarPadding"
+                MenuBarPadding.Parent = MenuBar
+                MenuBarPadding.PaddingLeft = UDim.new(0, 6)
+
+                MenuBarItem.MouseButton1Click:Connect(function()
+                    MenuBarItem_Items.Visible = Open
+                end)
+
+                MenuBarItem_Items_ItemMain.MouseButton1Click:Connect(function()
+                    if not ItemProperties.OnClick then 
+                        return
+                    end
+
+                    pcall(ItemProperties.OnClick)
+                end)
+            end
+        end
+    end
+
+    local TweenService = game:GetService("TweenService")
+    local UserInputService = game:GetService("UserInputService")
+    
+    local selected = false
+    local window = Window
+    local corner = ResizeAll
+    local debounce = false
+    
+    local function updateInitialPosition()
+        local initialPosition = UDim2.new(1, -(corner.AbsoluteSize.X - 10), 1, -(corner.AbsoluteSize.Y - 10) + 0.1)
+        local tweenInfo = TweenInfo.new(0.01, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+        local initTween = TweenService:Create(corner, tweenInfo, {
+            Position = initialPosition
+        })
+        initTween:Play()
+    end
+    updateInitialPosition()
+    
+    local function ResizeWindow()
+        if debounce then
+            return
+        end
+        debounce = true
+    
+        local mousePos = UserInputService:GetMouseLocation()
+        local windowLeft = window.AbsolutePosition.X
+        local windowTop = window.AbsolutePosition.Y
+        local cornerWidth = corner.AbsoluteSize.X
+        local cornerHeight = corner.AbsoluteSize.Y
+    
+        local newWidth = math.max((mousePos.X - windowLeft + (cornerWidth / 2)), 35)
+        local newHeight = math.max(((mousePos.Y - windowTop + (cornerHeight / 2)) - 35), 35)
+    
+        local tweenInfo = TweenInfo.new(0.01, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+        local resizeTween = TweenService:Create(window, tweenInfo, {
+            Size = UDim2.new(0, newWidth, 0, newHeight)
+        })
+        resizeTween:Play()
+        
+        updateInitialPosition()
+    
+        debounce = false
+    end
+    
+    corner.MouseButton1Down:Connect(function()
+        selected = true
+        ResizeWindow()
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input)
+        if selected and input.UserInputType == Enum.UserInputType.MouseMovement then
+            ResizeWindow()
+        end
+    end)
+    
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            selected = false
+        end
+    end)
+    
+    window:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+        updateInitialPosition()
+    end)
+
+    
+    local TweenService = game:GetService("TweenService")
+    local UserInputService = game:GetService("UserInputService")
+    
+    local window = Window
+    local topPanel = WindowPanel
+    
+    local dragging = false
+    local dragInput = nil
+    local dragStart = nil
+    local startPos = nil
+    
+    local function updateDrag(input)
+        local delta = input.Position - dragStart
+        local newPosition = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    
+        local tweenInfo = TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        local tween = TweenService:Create(window, tweenInfo, { Position = newPosition })
+        tween:Play()
+    end
+    
+    topPanel.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = window.Position
+    
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+    
+    topPanel.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement then
+            dragInput = input
+        end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            updateDrag(input)
+        end
+    end)
+
+    local showing = true
+    MinimiseButton.MouseButton1Click:Connect(function() 
+        showing = not showing
+        
+			if not showing then
+				WindowElementContainer.Visible = false
+				WindowPanelIcon.ImageTransparency = 0.3
+				Window.BackgroundTransparency = 1
+				ResizeAll.Visible = false
+
+				Window.Active = false      -- большой невидимый прямоугольник больше не блокирует мышь
+				WindowPanel.Active = true  -- шапка остаётся интерактивной для drag
+			else
+				WindowElementContainer.Visible = true
+				WindowPanelIcon.ImageTransparency = 0
+				Window.BackgroundTransparency = 0.05
+				ResizeAll.Visible = true
+
+				Window.Active = true
+				WindowPanel.Active = false
+			end
+        
+    end)
+    
+    function ElementHandler:End()
+        local showing = true
+        MinimiseButton.MouseButton1Click:Connect(function() 
+            showing = not showing
+            
+            if not showing then
+                WindowElementContainer.Visible = false
+                WindowPanelIcon.ImageTransparency = 0.3
+                Window.BackgroundTransparency = 1
+                ResizeAll.Visible = false
+                MinimiseButtonIcon.Rotation = 180
+            else
+                WindowElementContainer.Visible = true
+                WindowPanelIcon.ImageTransparency = 0
+                Window.BackgroundTransparency = 0.05
+                ResizeAll.Visible = true
+                MinimiseButtonIcon.Rotation = 0
+            end
+            
+        end)
+
+        Window:GetPropertyChangedSignal("Size"):Connect(function()
+            local children = WindowElements:GetChildren()
+            WindowElements.ScrollingEnabled = true
+    
+            WindowElements.CanvasSize = UDim2.new(0, 0, 0, 0)
+            
+            local totalHeight = 0
+            for _, child in ipairs(children) do
+                if child:IsA("GuiObject") then
+                    totalHeight = (totalHeight + child.Size.Y.Offset) + 5
+                end
+            end
+            
+            if totalHeight > WindowElements.AbsoluteSize.Y then
+                local padding = 0
+                padding = WindowElementsContainerLayout.Padding.Offset
+                WindowElements.CanvasSize = UDim2.new(0, 0, 0, totalHeight + padding)
+            end
+        end)
+
+        UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+            if input.KeyCode.Name == "RightBracket" then
+                if syn.protect_gui then
+                    syn.unprotect_gui(ImGui)
+                    ImGui:Destroy()
+                elseif gethui then
+                    ImGui.Parent = nil
+                    ImGui:Destroy()
+                end
+            end
+        end)
+    end
+
+    return ElementHandler
 end
 
-function ImGui:CreateModal(Config)
-	local ModalEffect = Prefabs.ModalEffect:Clone()
-	ModalEffect.BackgroundTransparency = 1
-	ModalEffect.Parent = ImGui.FullScreenGui
-	ModalEffect.Visible = true
-
-	ImGui:Tween(ModalEffect, {
-		BackgroundTransparency = 0.6
-	})
-
-	--// Config
-	Config = Config or {}
-	Config.TabsBar = Config.TabsBar ~= nil and Config.TabsBar or false
-	Config.NoCollapse = true
-	Config.NoResize = true
-	Config.NoClose = true
-	Config.NoSelectEffect = true
-	Config.Parent = ModalEffect
-
-	--// Center
-	Config.AnchorPoint = Vector2.new(0.5, 0.5)
-	Config.Position = UDim2.fromScale(0.5, 0.5)
-
-	--// Create Window
-	local Window = self:CreateWindow(Config)
-	Config = Window:CreateTab({
-		Visible = true
-	})
-	
-	--// Disable other windows
-	local WindowManger = ImGui:SetWindowProps({
-		Interactable = false
-	}, {Window.Window})
-
-	--// Close functions
-	local WindowClose = Window.Close
-	function Config:Close()
-		local Tween = ImGui:Tween(ModalEffect, {
-			BackgroundTransparency = 1
-		})
-		Tween.Completed:Connect(function()
-			ModalEffect:Remove()
-		end)
-		
-		WindowManger:Revert()
-		WindowClose()
-	end
-
-	return Config
-end
-
-local GuiParent = IsStudio and PlayerGui or CoreGui
-ImGui.ScreenGui = ImGui:CreateInstance("ScreenGui", GuiParent, {
-	DisplayOrder = 9999,
-	ResetOnSpawn = false
-})
-ImGui.FullScreenGui = ImGui:CreateInstance("ScreenGui", GuiParent, {
-	DisplayOrder = 99999,
-	ResetOnSpawn = false,
-	ScreenInsets = Enum.ScreenInsets.None
-})
-
-return ImGui
+return main
