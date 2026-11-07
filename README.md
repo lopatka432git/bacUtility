@@ -2,7 +2,7 @@
 Script for roblox place Build and Conquer
 
 Execute it for run script!
-loadstring(game:HttpGet("https://raw.githubusercontent.com/lopatka432git/bacUtility/refs/heads/main/bac_main"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/lopatka432git/bacUtility/refs/heads/main/bac_main.lua"))()
 
 This script support ESP for air defense, buildings, rockets, players and other functions
 <img width="491" height="331" alt="image" src="https://github.com/user-attachments/assets/37fd87e7-013e-4f6c-b61c-6bb35e646972" /> <img width="817" height="425" alt="image" src="https://github.com/user-attachments/assets/cc9a91b6-cb11-4490-8a8b-74605fd80083" />
